@@ -1,0 +1,2 @@
+"""Fault report generator backend."""
+

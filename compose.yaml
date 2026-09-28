@@ -1,0 +1,49 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    ports:
+      - "0.0.0.0:5173:8787"
+    depends_on:
+      fault-report-service:
+        condition: service_healthy
+    restart: unless-stopped
+
+  fault-report-service:
+    build:
+      context: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://fault_report:${FAULT_REPORT_DB_PASSWORD:?Set FAULT_REPORT_DB_PASSWORD in .env}@fault-report-db:5432/fault_report
+    ports:
+      - "0.0.0.0:8000:8000"
+    depends_on:
+      fault-report-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 8
+      start_period: 20s
+    restart: unless-stopped
+
+  fault-report-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: fault_report
+      POSTGRES_USER: fault_report
+      POSTGRES_PASSWORD: ${FAULT_REPORT_DB_PASSWORD:?Set FAULT_REPORT_DB_PASSWORD in .env}
+    volumes:
+      - fault-report-postgres:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fault_report -d fault_report"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+volumes:
+  fault-report-postgres:

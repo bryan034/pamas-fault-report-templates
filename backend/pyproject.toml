@@ -1,0 +1,26 @@
+[project]
+name = "fault-report-backend"
+version = "0.1.0"
+description = "FastAPI backend for generating Pamas fault report PDFs"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.116.0",
+  "pillow>=11.3.0",
+  "pydantic>=2.11.0",
+  "pypdf>=5.8.0",
+  "python-multipart>=0.0.20",
+  "reportlab>=4.4.0",
+  "sqlalchemy>=2.0.43",
+  "psycopg[binary]>=3.2.9",
+  "uvicorn[standard]>=0.35.0",
+]
+
+[dependency-groups]
+dev = [
+  "httpx>=0.28.0",
+  "pytest>=8.4.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
