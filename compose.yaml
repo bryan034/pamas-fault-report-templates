@@ -21,6 +21,9 @@ services:
       fault-report-db:
         condition: service_healthy
     healthcheck:
+      # cmd runs python directly, -c tells python excecute next argument as code
+      # urllib.request.urlopen sends get request to health endpoint
+      # timeout=2 stop waiting if req takes longer than 2s
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=2)"]
       interval: 10s
       timeout: 3s
@@ -39,7 +42,10 @@ services:
     ports:
       - "127.0.0.1:5433:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U fault_report -d fault_report"]
+      # cmd-shell runs db check through a shell 
+      test: ["CMD-SHELL", "pg_isready -U fault_report -d fault_report"] #pg_isready asks whether postgresql accepting connections. 
+      # Docker runs this roughly every 5 seconds, allows up to 3 seconds per attempt, and marks the container unhealthy after 12 consecutive failed checks
+      # checks readiness, not whether be pw is correct
       interval: 5s
       timeout: 3s
       retries: 12

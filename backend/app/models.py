@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Literal
-from uuid import UUID
+from typing import Literal # lets a type hint specify exact allowed values rather than js general type
+from uuid import UUID #python inbuild type for uniqye identifier
 
 
 from pydantic import BaseModel, Field, computed_field, field_validator
@@ -46,6 +46,12 @@ class ImageRectangle(BaseModel):
     width: float = Field(gt=0, le=1)
     height: float = Field(gt=0, le=1)
     color: str = Field(pattern=r"^#[0-9A-Fa-f]{6}$")
+    # color is a required string whose format is:
+    #  ^ — start of the string
+    # # — a literal hash sign
+    # [0-9A-Fa-f] — one hexadecimal character
+    # {6} — exactly six of those characters
+    # $ — end of the string
     stroke_width: float = Field(ge=0.5, le=12)
 
     @property

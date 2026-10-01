@@ -1,16 +1,18 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-from io import BytesIO
+from dataclasses import dataclass, replace # dataclass helps define FieldBox below, replace will later make modified copy of FieldBox
+from io import BytesIO # provides file-like obj held in memory (build pdf without saving it to disk -- for preview)
 from pathlib import Path
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps # Pillow's image opens and processes uploaded pics, ImageOps provides image transformations
+# Pillow (PIL (Python Imaging Library) was original library, now discontinued and forked to become Pillow) 
+# package used for image resizing, format conversions, basic image processing, drawing/ annotation/ working with bytes
 from pypdf import PdfReader, PdfWriter
-from reportlab.lib.pagesizes import letter
-from reportlab.lib.utils import ImageReader
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter #provides letter dimensions
+from reportlab.lib.utils import ImageReader #adapts image so it can drawn onto a pdf canvas
+from reportlab.pdfbase import pdfmetrics #measures text and manages registered fonts
+from reportlab.pdfbase.ttfonts import TTFont #lets reportlab use a TrueType .ttf font file
+from reportlab.pdfgen import canvas #reportlab drawing surface for text, images, 
 
 from .models import ImageRectangle, RepairPriority, ReportData
 
@@ -42,7 +44,9 @@ def _register_title_font() -> str:
     return "Times-Bold"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True) # creates initialiser so code can write FieldBox(90,557,...)
+# frozen=True prevents modifying exisiting box 
+# later code can use replace() to create a changed copy
 class FieldBox:
     x: float
     y: float
@@ -51,11 +55,11 @@ class FieldBox:
     maximum: float
     minimum: float = 6
     alignment: str = "center"
-    size_group: str | None = None
+    size_group: str | None = None #optionally connects fields to a font size setting (like temperatures)
     font: str = FONT
 
 
-# Runtime content is drawn without a background so master form lines stay visible.
+# Runtime content is drawn without a background so master form lines stay visible. 
 FIELDS = {
     "report_number": FieldBox(284, 729, 32, 26, 24, 8, size_group="report_number", font=TITLE_FONT),
     "company": FieldBox(90, 667, 154, 24, 18, 6, size_group="company"),
@@ -94,7 +98,7 @@ CLEAN_IMAGE_FRAMES = {
 }
 
 # Used once to clean the supplied example. Never painted into report overlays.
-MASKS = [
+MASKS = [ #(x,y,width,height)
     (284, 729, 32, 26), (90, 667, 154, 24), (120, 617, 120, 26),
     (113, 571, 125, 21), (129, 526, 70, 20), (205, 526, 38, 20),
     (485.5, 635.5, 33, 20),
@@ -119,29 +123,31 @@ def build_blank_template(output_path: Path = TEMPLATE_PATH) -> Path:
     """Remove sample content once while preserving the original form geometry."""
     if not SOURCE_TEMPLATE_PATH.exists():
         raise FileNotFoundError(f"Missing source template: {SOURCE_TEMPLATE_PATH}")
-    overlay_buffer = BytesIO()
-    overlay = canvas.Canvas(overlay_buffer, pagesize=letter)
-    overlay.setFillColorRGB(1, 1, 1)
-    for rectangle in [*MASKS, *CLEAN_IMAGE_FRAMES.values()]:
-        overlay.rect(*rectangle, fill=1, stroke=0)
-    overlay.setFillColorRGB(*TEMPLATE_BLUE)
+    overlay_buffer = BytesIO() #create in-memory byte buffer for temp PDF overlay
+    overlay = canvas.Canvas(overlay_buffer, pagesize=letter) #create Letter-sized ReportLab canvas that writes into that buffer
+    overlay.setFillColorRGB(1, 1, 1) #doesnt fill whole overlay white. sets drawing color to white
+    for rectangle in [*MASKS, *CLEAN_IMAGE_FRAMES.values()]: # * unpacks iterable from each collection into 1 list
+        overlay.rect(*rectangle, fill=1, stroke=0) #unpack rectangle (x,y,width, height). stroke = 0 avoids drawing border. fills them to white
+    overlay.setFillColorRGB(*TEMPLATE_BLUE) 
     overlay.setFont("Times-Roman", 10.6997 * 0.75)
     overlay.drawString(547.039978 * 0.75, 792 - 223.039993 * 0.75, "No repair required,")
-    overlay.save()
-    overlay_buffer.seek(0)
+    overlay.save() 
+    overlay_buffer.seek(0) #move buffer read pos back to beginning 
     source = PdfReader(str(SOURCE_TEMPLATE_PATH))
     blanking = PdfReader(overlay_buffer)
     writer = PdfWriter()
     writer.clone_document_from_reader(source)
-    writer.pages[0].merge_page(blanking.pages[0])
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("wb") as destination:
+    writer.pages[0].merge_page(blanking.pages[0]) # places overlay ontop of its first page (source)
+    output_path.parent.mkdir(parents=True, exist_ok=True) # ensures directory where file shd live exists 
+    # parents = True creates any missing parent directories along the path 
+    # exist_ok = True prevents python from throwing FileExistsError if directory alredy exists
+    with output_path.open("wb") as destination: #wb stands for write binary mode *(bytes)
         writer.write(destination)
     return output_path
 
 
 def _requested_size(report: ReportData, field: FieldBox) -> float:
-    requested = getattr(report.font_sizes, field.size_group or "", None)
+    requested = getattr(report.font_sizes, field.size_group or "", None) #finds optional font-size in report.font_sizes using field.size_group
     return min(field.maximum, requested) if requested is not None else field.maximum
 
 
@@ -151,7 +157,10 @@ def _offset(report: ReportData, key: str) -> tuple[float, float]:
 
 
 def _font_height(size: float, font: str = FONT) -> float:
-    return pdfmetrics.getAscent(font, size) - pdfmetrics.getDescent(font, size)
+    """calculates total visual height (in pts) of a text font at a given size using ReportLab's pdfmetrics module"""
+    return pdfmetrics.getAscent(font, size) - pdfmetrics.getDescent(font, size) 
+    # getAscent returns distance from baseline up to top of highest chr (typically +ve)
+    # Descent distance from baseline down to lowest part of letter (typically -ve)
 
 
 def _fit_single_line(value: str, field: FieldBox, maximum: float) -> float:
@@ -159,10 +168,12 @@ def _fit_single_line(value: str, field: FieldBox, maximum: float) -> float:
     available_height = max(1, field.height - 3)
     size = maximum
     while size >= field.minimum:
-        if pdfmetrics.stringWidth(value, field.font, size) <= available_width and _font_height(size, field.font) <= available_height:
+        if pdfmetrics.stringWidth(value, field.font, size) <= available_width and _font_height(size, field.font) <= available_height: 
+            # if width and height of str within avail dimensions, size is acceptable
             return size
-        size = round(size - 0.25, 2)
-    if value and pdfmetrics.stringWidth(value, field.font, field.minimum) > available_width:
+        size = round(size - 0.25, 2) 
+    if value and pdfmetrics.stringWidth(value, field.font, field.minimum) > available_width: 
+        # if text still too wide at minimum width, raise error
         raise ValueError(f'"{value}" does not fit its PDF field at the minimum font size')
     return field.minimum
 

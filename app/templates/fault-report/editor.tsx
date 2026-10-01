@@ -96,7 +96,7 @@ function loadPercentage(current: string, rated: string): string {
 }
 function extractReading(text: string, label: "Bx1" | "Bx2"): number | null {
   const normalized = text.replace(/[°º]/g, " ").replace(/,/g, ".");
-  const labelPattern = label === "Bx1" ? "Bx[1Il]" : "Bx2";
+  const labelPattern = label === "Bx1" ? "Bx[1Il]" : "Bx2"; // when looking for bx1, also accepts chr OCR might confuse with 1 like I or l
   const match = normalized.match(new RegExp(`${labelPattern}[^\\d-]{0,24}(-?\\d{1,3}(?:\\.\\d+)?)`, "i"));
   return match ? Number(match[1]) : null;
 }
@@ -441,32 +441,39 @@ export default function FaultReportEditor({ draftId }: { draftId: string | null 
 
   const runOcr = async (file = infrared) => {
     if (!file) return;
-    setOcrBusy(true); setNotice("Reading the infrared image");
+    setOcrBusy(true); //shows loading state 
+    setNotice("Reading the infrared image");
     try {
-      const bitmap = await createImageBitmap(file);
+      const bitmap = await createImageBitmap(file); // decodes image into sth browser can draw
       const cropWidth = Math.max(1, Math.floor(bitmap.width * 0.58));
-      const cropHeight = Math.max(1, Math.floor(bitmap.height * 0.24));
+      const cropHeight = Math.max(1, Math.floor(bitmap.height * 0.24)); //crops 58% width and 24% height from left and top respectively
+      // ocr doesnt inspect full image
       const canvas = document.createElement("canvas");
-      canvas.width = cropWidth * 3; canvas.height = cropHeight * 3;
-      const context = canvas.getContext("2d", { willReadFrequently: true });
+      canvas.width = cropWidth * 3; canvas.height = cropHeight * 3; //makes canvas 3* crop width n height, enlarge small texts
+      const context = canvas.getContext("2d", { willReadFrequently: true }); //willReadFrequently optimisation hint passed to browser that codes intent to frequently read back pixel data using getImageData() or similar
+      // by default browser stores canvas rendering buffers on gpu for faster drawing, setting this attribute true encourage browser store canvas data in cpu to avoid expensive cpu-gpu memory sync bottlenecks
+      // getContext("2d") creates and returns 2d rendering context obj. without, canvas is a empty html container w no ability to draw/ manipulate graphics
+
       if (!context) throw new Error("Canvas is unavailable");
-      context.drawImage(bitmap, 0, 0, cropWidth, cropHeight, 0, 0, canvas.width, canvas.height);
-      const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+      context.drawImage(bitmap, 0, 0, cropWidth, cropHeight, 0, 0, canvas.width, canvas.height); //draws cropped ir image onto canvas. first 4 coordinates source crop, last 4 where and how large to draw it
+      const pixels = context.getImageData(0, 0, canvas.width, canvas.height); //returns JS array, each pixel has rgb and alpha values
       for (let index = 0; index < pixels.data.length; index += 4) {
-        const luminance = pixels.data[index] * .299 + pixels.data[index + 1] * .587 + pixels.data[index + 2] * .114;
-        const output = luminance > 155 ? 0 : 255;
-        pixels.data[index] = output; pixels.data[index + 1] = output; pixels.data[index + 2] = output;
+        const luminance = pixels.data[index] * .299 + pixels.data[index + 1] * .587 + pixels.data[index + 2] * .114; 
+        const output = luminance > 155 ? 0 : 255; //converts image to bnw image using brightness as the deciding factor
+        pixels.data[index] = output; pixels.data[index + 1] = output; pixels.data[index + 2] = output; //alpha left unchanged
       }
-      context.putImageData(pixels, 0, 0);
+      context.putImageData(pixels, 0, 0); //writes changed pixels back into canvas
       bitmap.close();
-      const worker = await createWorker("eng", 1, { langPath: "/" });
-      const result = await worker.recognize(canvas);
-      await worker.terminate();
+      const worker = await createWorker("eng", 1, { langPath: "/" }); //creates Tesseract.js OCR worker: "eng" english, 1 selects its LSTM-only (long short-term memory) recognition mode (recognise full lines of text instead of indiv characters 1by1); langPath points to locally served english language file
+      const result = await worker.recognize(canvas); 
+      await worker.terminate(); //stops worker after recognition
       const text = result.data.text.trim();
       const bx1 = extractReading(text, "Bx1"); const bx2 = extractReading(text, "Bx2");
       setOcrText(text); setOcrConfidence(Math.round(result.data.confidence));
+      // stores raw OCR test for review panel and displays Tesseract's rounded overall confidence score
       setPreviewStatus("loading");
-      setForm((current) => ({ ...current, bx1: bx1 ?? current.bx1, bx2: bx2 ?? current.bx2, readings_confirmed: false }));
+      setForm((current) => ({ ...current, bx1: bx1 ?? current.bx1, bx2: bx2 ?? current.bx2, readings_confirmed: false })); 
+      // puts extracted values into form, if not extracted, current bx1 values remain
       setNotice(bx1 === null || bx2 === null ? "One or more readings need manual review" : `Read Bx1 ${bx1.toFixed(1)} °C and Bx2 ${bx2.toFixed(1)} °C`);
     } catch { setNotice("Automatic reading failed. Enter Bx1 and Bx2 manually."); setOcrText(""); setOcrConfidence(null); }
     finally { setOcrBusy(false); }
