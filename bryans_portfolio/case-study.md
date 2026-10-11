@@ -1,10 +1,10 @@
 ## Overview
 
-Report Formatter helps prepare thermal fault reports without manually rebuilding a fixed PDF form. Its implemented Fault Report template combines structured entry, separate equipment and infrared uploads, reviewable temperature suggestions, saved drafts, an exact-PDF preview, and downloadable reports. The catalog currently contains one working template.
+Report Formatter helps prepare thermal fault reports without manually rebuilding a fixed PDF form. Its implemented Fault Report template combines structured entry, separate equipment and infrared image uploads, reviewable temperature suggestions, saved drafts, an exact-PDF preview, and downloadable reports. The catalog currently contains one working template.
 
 ## My contribution & project context
 
-I designed the product and reviewed its AI-assisted implementation.
+Designed the architecture, product, and decided the tech stack used for the project.
 
 - Designed the fault-report entry, image upload, and OCR review workflow.
 - Specified draft management, company reuse, and PDF layout fidelity requirements.
@@ -26,4 +26,4 @@ A web catalog and fault-report service run alongside PostgreSQL. Drafts retain f
 
 ## Further development
 
-Add another report template to validate the service-per-template design. Before wider deployment, add authentication, backups, and monitoring. Creating templates from arbitrary filled PDFs remains exploratory and would require field mapping and visual verification.
+ Before wider deployment, add authentication, backups, and monitoring. Creating templates from arbitrary filled PDFs was the client's next goal and would require field mapping and visual verification.
