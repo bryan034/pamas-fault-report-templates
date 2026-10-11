@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "title": "Report Formatter",
+  "summary": "Turns thermal fault report inputs and images into reviewable drafts and template-aligned PDFs.",
+  "category": "Document automation",
+  "role": "Product designer and implementation reviewer",
+  "technologies": [
+    "Tesseract.js",
+    "PDF.js",
+    "ReportLab",
+    "pypdf"
+  ],
+  "status": "Independent project",
+  "featured": true,
+  "visible": true,
+  "order": 100,
+  "coverAlt": "Screenshot of the draft library with filters and example draft cards.",
+  "coverCaption": "Draft library interface with example draft data.",
+  "contributions": [
+    "Designed the fault-report entry, image upload, and OCR review workflow.",
+    "Specified draft management, company reuse, and PDF layout fidelity requirements.",
+    "Reviewed AI-assisted implementation of the editor, PDF service, and database-backed drafts."
+  ],
+  "contributionConfirmed": true,
+  "demoUrl": null
+}
