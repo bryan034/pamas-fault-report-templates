@@ -13,3 +13,10 @@ backend/tests
 output
 outputs
 work
+.playwright
+test-results
+playwright-report
+backend/.uv-cache
+backend/.uv-tool
+public/ocr
+public/pdf.worker.min.mjs

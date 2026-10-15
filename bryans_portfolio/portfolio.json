@@ -1,25 +1,26 @@
 {
   "version": 1,
   "title": "Report Formatter",
-  "summary": "Turns thermal fault report inputs and images into reviewable drafts and template-aligned PDFs.",
+  "summary": "Builds reusable PDF templates with editable fields, browser OCR, saved drafts, and layout-matched report exports.",
   "category": "Document automation",
   "role": "Product designer and implementation reviewer",
   "technologies": [
+    "Vinext",
     "Tesseract.js",
     "PDF.js",
     "ReportLab",
-    "pypdf"
+    "pdfplumber"
   ],
   "status": "Independent project",
   "featured": true,
   "visible": true,
   "order": 100,
-  "coverAlt": "Screenshot of the draft library with filters and example draft cards.",
-  "coverCaption": "Draft library interface with example draft data.",
+  "coverAlt": "Template builder showing draggable fields and percentage-calculation settings.",
+  "coverCaption": "Template builder with calculated fields on a synthetic two-page PDF used in browser tests.",
   "contributions": [
-    "Designed the fault-report entry, image upload, and OCR review workflow.",
-    "Specified draft management, company reuse, and PDF layout fidelity requirements.",
-    "Reviewed AI-assisted implementation of the editor, PDF service, and database-backed drafts."
+    "Designed the reusable-template builder, report editor, and configurable image-extraction workflow.",
+    "Specified revision-safe drafts, annotation tools, calculations, and PDF layout requirements.",
+    "Reviewed AI-assisted implementation across the interface, PDF processing, persistence, and regression tests."
   ],
   "contributionConfirmed": true,
   "demoUrl": null

@@ -6,24 +6,23 @@ services:
     ports:
       - "0.0.0.0:5173:8787"
     depends_on:
-      fault-report-service:
+      template-service:
         condition: service_healthy
     restart: unless-stopped
 
-  fault-report-service:
+  # Every uploaded PDF is configuration in this shared service, not a new deployment.
+  template-service:
     build:
       context: ./backend
+    command: ["uv", "run", "--frozen", "--no-dev", "uvicorn", "app.template_main:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
-      DATABASE_URL: postgresql+psycopg://fault_report:${FAULT_REPORT_DB_PASSWORD:?Set FAULT_REPORT_DB_PASSWORD in .env}@fault-report-db:5432/fault_report
+      TEMPLATE_DATABASE_URL: postgresql+psycopg://templates:${FAULT_REPORT_DB_PASSWORD:?Set FAULT_REPORT_DB_PASSWORD in .env}@template-db:5432/templates
     ports:
-      - "0.0.0.0:8000:8000"
+      - "0.0.0.0:8001:8000"
     depends_on:
-      fault-report-db:
+      template-db:
         condition: service_healthy
     healthcheck:
-      # cmd runs python directly, -c tells python excecute next argument as code
-      # urllib.request.urlopen sends get request to health endpoint
-      # timeout=2 stop waiting if req takes longer than 2s
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=2)"]
       interval: 10s
       timeout: 3s
@@ -31,25 +30,22 @@ services:
       start_period: 20s
     restart: unless-stopped
 
-  fault-report-db:
+  template-db:
     image: postgres:17-alpine
     environment:
-      POSTGRES_DB: fault_report
-      POSTGRES_USER: fault_report
+      POSTGRES_DB: templates
+      POSTGRES_USER: templates
       POSTGRES_PASSWORD: ${FAULT_REPORT_DB_PASSWORD:?Set FAULT_REPORT_DB_PASSWORD in .env}
     volumes:
-      - fault-report-postgres:/var/lib/postgresql/data
+      - template-postgres:/var/lib/postgresql/data
     ports:
-      - "127.0.0.1:5433:5432"
+      - "127.0.0.1:5434:5432"
     healthcheck:
-      # cmd-shell runs db check through a shell 
-      test: ["CMD-SHELL", "pg_isready -U fault_report -d fault_report"] #pg_isready asks whether postgresql accepting connections. 
-      # Docker runs this roughly every 5 seconds, allows up to 3 seconds per attempt, and marks the container unhealthy after 12 consecutive failed checks
-      # checks readiness, not whether be pw is correct
+      test: ["CMD-SHELL", "pg_isready -U templates -d templates"]
       interval: 5s
       timeout: 3s
       retries: 12
     restart: unless-stopped
 
 volumes:
-  fault-report-postgres:
+  template-postgres:

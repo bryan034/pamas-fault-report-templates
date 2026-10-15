@@ -51,3 +51,9 @@ next-env.d.ts
 /backend/.uv-tool/
 /backend/__pycache__/
 /backend/.pytest_cache/
+/public/ocr/
+/public/pdf.worker.min.mjs
+**/__pycache__/
+/.playwright/
+/test-results/
+/playwright-report/
