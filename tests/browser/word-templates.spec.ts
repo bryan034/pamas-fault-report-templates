@@ -1,0 +1,77 @@
+import { test, expect } from "./checker-fixture";
+import { execFileSync } from "node:child_process";
+import { resolve } from "node:path";
+
+const api = "http://127.0.0.1:8011";
+const python = (code: string) => execFileSync(resolve("backend/.venv/bin/python"), ["-c", code], {
+  cwd: resolve("backend"), env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+});
+
+test("PDF templates export both Word and PDF and retain original source downloads", async ({ page, request }) => {
+  const model = python("import runpy;print(runpy.run_path('tests/test_templates.py')['definition']().model_dump_json())").toString();
+  const source = python("import runpy,sys;sys.stdout.buffer.write(runpy.run_path('tests/test_templates.py')['sample_pdf']())");
+  const saved = await request.post(api + "/api/templates", { multipart: {
+    title: "PDF cross-format", definition_json: model,
+    pdf: { name: "source.pdf", mimeType: "application/pdf", buffer: source },
+  } });
+  expect(saved.ok(), await saved.text()).toBe(true);
+  const template = await saved.json();
+  await page.goto(`/templates/custom/${template.id}/new`);
+  await page.getByLabel("Report title", { exact: true }).fill("Cross-format job");
+  await page.getByLabel("Company", { exact: true }).fill("Acme");
+  for (const [button, extension] of [["Download Word", "docx"], ["Download PDF", "pdf"], ["Download original format (PDF)", "pdf"]]) {
+    const downloading = page.waitForEvent("download");
+    await page.getByRole("button", { name: button, exact: true }).click();
+    expect((await downloading).suggestedFilename()).toBe(`Cross-format job.${extension}`);
+  }
+  await page.getByRole("button", { name: "Save draft", exact: true }).click();
+  await expect(page).toHaveURL(/\/drafts\//);
+  await page.goto(`/templates/custom/${template.id}`);
+  for (const [button, filename] of [["Download Word Cross-format job", "Cross-format job.docx"], ["Download original format Cross-format job", "Cross-format job.pdf"], ["Download original template", "PDF cross-format-original.pdf"]]) {
+    const downloading = page.waitForEvent("download");
+    await page.getByRole("button", { name: button, exact: true }).click();
+    expect((await downloading).suggestedFilename()).toBe(filename);
+  }
+});
+
+test("real Word upload uses the shared builder, editing, defaults, saved drafts and both exports", async ({ page, request }) => {
+  // Set to a DISPOSABLE service image with LibreOffice and its own SQLite DB.
+  // Never point this at the saved local PostgreSQL service or production.
+  const wordApi = process.env.QA_WORD_API_URL;
+  test.skip(!wordApi, "Run with QA_WORD_API_URL against the disposable LibreOffice service");
+  await page.route(`${api}/api/**`, async route => {
+    const response = await route.fetch({ url: route.request().url().replace(api, wordApi!) });
+    await route.fulfill({ response });
+  });
+  const source = python("import runpy,sys;sys.path.insert(0,'tests');sys.stdout.buffer.write(runpy.run_path('tests/test_word_templates.py')['sample_word']())");
+  await page.goto("/templates/new");
+  await page.getByLabel("Upload report PDF or Word document").setInputFiles({ name: "Word inspection.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", buffer: source });
+  await expect(page.getByRole("toolbar", { name: "Template editing tools" })).toBeVisible();
+  await page.getByLabel("Field label", { exact: true }).fill("Reusable value");
+  await page.getByLabel("Default value for new reports").fill("Word default");
+  await page.getByRole("button", { name: "Preview report creation flow", exact: true }).click();
+  await expect(page.getByLabel("Reusable value", { exact: true })).toHaveValue("Word default");
+  await page.getByRole("button", { name: "Save template", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Word inspection is ready" })).toBeVisible();
+  const listing = await (await request.get(wordApi + "/api/templates")).json();
+  const template = listing.templates.find((item: { title: string }) => item.title === "Word inspection");
+  expect(template).toBeTruthy();
+  await page.goto(`/templates/custom/${template.id}/edit`);
+  await expect(page.getByLabel("Default value for new reports")).toHaveValue("Word default");
+  await page.getByRole("button", { name: "Save template", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Word inspection is ready" })).toBeVisible();
+  const original = await request.get(`${wordApi}/api/templates/${template.id}/original`);
+  expect(await original.body()).toEqual(source);
+  await page.goto(`/templates/custom/${template.id}/new`);
+  await page.getByLabel("Report title", { exact: true }).fill("Word job");
+  await expect(page.getByLabel("Reusable value", { exact: true })).toHaveValue("Word default");
+  await page.getByLabel("Reusable value", { exact: true }).fill("Report value");
+  await page.getByRole("button", { name: "Save draft", exact: true }).click();
+  await expect(page).toHaveURL(/\/drafts\//);
+  for (const [button, extension] of [["Download Word", "docx"], ["Download PDF", "pdf"], ["Download original format (DOCX)", "docx"]]) {
+    const downloading = page.waitForEvent("download");
+    await page.getByRole("button", { name: button, exact: true }).click();
+    expect((await downloading).suggestedFilename()).toBe(`Word job.${extension}`);
+  }
+  expect((await (await request.get(`${wordApi}/api/templates/${template.id}`)).json()).source_format).toBe("docx");
+});

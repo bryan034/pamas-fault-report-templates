@@ -1,15 +1,20 @@
 {
   "version": 1,
   "title": "Report Formatter",
-  "summary": "Builds reusable PDF templates with editable fields, browser OCR, saved drafts, and layout-matched report exports.",
+  "summary": "Turns PDF and Word documents into reusable report templates with browser OCR, calculated fields, revision-safe drafts, and PDF/DOCX exports, using a shared editor and Python rendering service.",
   "category": "Document automation",
   "role": "Product designer and implementation reviewer",
   "technologies": [
     "Vinext",
+    "FastAPI",
+    "PostgreSQL",
+    "Docker",
     "Tesseract.js",
     "PDF.js",
     "ReportLab",
-    "pdfplumber"
+    "pdfplumber",
+    "python-docx",
+    "LibreOffice Writer"
   ],
   "status": "Independent project",
   "featured": true,
@@ -18,8 +23,8 @@
   "coverAlt": "Template builder showing draggable fields and percentage-calculation settings.",
   "coverCaption": "Template builder with calculated fields on a synthetic two-page PDF used in browser tests.",
   "contributions": [
-    "Designed the reusable-template builder, report editor, and configurable image-extraction workflow.",
-    "Specified revision-safe drafts, annotation tools, calculations, and PDF layout requirements.",
+    "Designed the shared PDF/Word template builder, report editor, and configurable image-extraction workflow.",
+    "Specified revision-safe drafts, reusable field defaults, keyboard entry, annotations, calculations, and cross-format export requirements.",
     "Reviewed AI-assisted implementation across the interface, PDF processing, persistence, and regression tests."
   ],
   "contributionConfirmed": true,

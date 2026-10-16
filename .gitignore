@@ -31,6 +31,10 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 !.env.example
+.dev.vars*
+!.dev.vars.example
+/backend-secrets*.json
+/.local-https/
 
 # vercel
 .vercel
@@ -39,6 +43,7 @@ yarn-error.log*
 next-env.d.ts
 /dist/
 /.wrangler/
+**/.wrangler/
 # Checkout-local execution profile and tool state; never publish them.
 /.sites-runtime/
 /.agents/
@@ -57,3 +62,4 @@ next-env.d.ts
 /.playwright/
 /test-results/
 /playwright-report/
+/tmp/pdfs/

@@ -162,7 +162,8 @@ test("custom editor all field types, formulas, layout, image annotations, reset,
     await page.getByLabel(label, { exact: true }).fill(value);
   await page.getByLabel("Acknowledged", { exact: true }).check();
   await page.getByLabel("Condition").selectOption("Repair");
-  await expect(page.getByLabel("Load (calculated)")).toHaveValue("50%");
+  await expect(page.getByLabel("Load (calculated)")).toHaveCount(0);
+  await expect(page.getByLabel("Rendered value: Load", { exact: true })).toHaveCount(1);
   await page
     .locator(".template-image-input input[type=file]")
     .setInputFiles(await photo(page));

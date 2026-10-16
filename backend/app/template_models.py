@@ -62,6 +62,8 @@ class TemplateField(PageBox):
     image_fit: Literal["contain", "cover"] = "contain"
     calculation: Calculation | None = None
     suggested_value: str = Field(default="", max_length=2000)
+    # Explicit user defaults are separate from values detected in the source PDF.
+    default_value: str | bool = ""
 
 
 class ClearArea(PageBox):
@@ -170,6 +172,11 @@ class TemplateDefinition(BaseModel):
                     "OCR labels cannot be blank and each destination needs a single mapping"
                 )
             targets.add(mapping.target_field)
+        defaults = template_defaults(self)
+        for field in self.fields:
+            if field.default_value != "" and field.kind in {"image", "calculated"}:
+                raise ValueError(f"{field.label}: images and calculated fields cannot have default values")
+        TemplateReport(values=defaults).validate_for(self)
         return self
 
 
@@ -250,7 +257,7 @@ class TemplateReport(BaseModel):
 def resolved_values(
     definition: TemplateDefinition, report: TemplateReport
 ) -> dict[str, str | bool]:
-    values = dict(report.values)
+    values = {**template_defaults(definition), **report.values}
     for field in definition.fields:
         if field.kind != "calculated" or not field.calculation:
             continue
@@ -277,3 +284,11 @@ def resolved_values(
             "%" if calc.operation == "percentage" else ""
         )
     return values
+
+
+def template_defaults(definition: TemplateDefinition) -> dict[str, str | bool]:
+    return {
+        field.id: field.default_value
+        for field in definition.fields
+        if field.kind not in {"image", "calculated"} and field.default_value != ""
+    }

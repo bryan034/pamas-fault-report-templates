@@ -1,5 +1,6 @@
 import { createWorker } from "tesseract.js";
 import type { PageBox, Region, TemplateField } from "./template-api";
+import { createId } from "./create-id";
 
 const localWorker = () =>
   createWorker("eng", 1, {
@@ -232,7 +233,7 @@ export async function detectScannedPage(
         ? Math.max(...first.map((word) => word.bbox.y1 / canvas.height)) + 0.004
         : box.y + 0.004;
       return {
-        id: crypto.randomUUID(),
+        id: createId(),
         page: pageNumber,
         x: box.x + 0.004,
         y: top,

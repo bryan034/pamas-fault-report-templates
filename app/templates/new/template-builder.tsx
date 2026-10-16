@@ -34,6 +34,7 @@ import {
 } from "@/lib/template-editing";
 import TemplateEditor from "@/app/templates/custom/template-editor";
 import { calculationProblems } from "@/lib/template-calculations";
+import { createId } from "@/lib/create-id";
 
 type Selection = { kind: "field" | "cover"; id: string };
 type DocumentState = { title: string; definition: Definition };
@@ -254,9 +255,8 @@ export default function TemplateBuilder({
           },
         });
         setOriginal(data);
-        setFile(
-          new File([data], `${detail.title}.pdf`, { type: "application/pdf" }),
-        );
+        // Editing the canonical PDF must not replace the retained Word source.
+        setFile(null);
         setRevisionId(detail.revision_id);
         const first = firstEditableField(detail.definition.fields);
         setSelected(first ? { kind: "field", id: first.id } : null);
@@ -313,6 +313,7 @@ export default function TemplateBuilder({
           ? {
               ...item,
               kind,
+              default_value: "",
               role: null,
               calculation: kind === "calculated" ? item.calculation : null,
             }
@@ -449,7 +450,7 @@ export default function TemplateBuilder({
           setError("Template box limit reached.");
           return;
         }
-        const id = crypto.randomUUID();
+        const id = createId();
         pasteCount.current += 1;
         change((current) =>
           duplicateBox(current, snapshot, id, 0.015 * pasteCount.current),
@@ -498,15 +499,15 @@ export default function TemplateBuilder({
     return () => window.removeEventListener("keydown", key);
   });
   const upload = async (next: File) => {
-    if (!next.name.toLowerCase().endsWith(".pdf")) {
-      setError("Upload a PDF. Export Excel sheets as PDF first.");
+    if (!/\.(pdf|docx)$/i.test(next.name)) {
+      setError("Upload a PDF or Word .docx file. Save older .doc files as .docx first.");
       return;
     }
     if (next.size > 20 * 1024 * 1024) {
-      setError("PDF exceeds the 20 MB limit.");
+      setError("Document exceeds the 20 MB limit.");
       return;
     }
-    setBusy("Analyzing PDF…");
+    setBusy(/\.docx$/i.test(next.name) ? "Converting Word document and analyzing fields…" : "Analyzing PDF…");
     setError("");
     try {
       const data = new FormData();
@@ -514,9 +515,10 @@ export default function TemplateBuilder({
       const result = await templateJson<{
         definition: Definition;
         scanned_pages: number[];
+        render_pdf?: string | null;
       }>("/api/templates/analyze", { method: "POST", body: data });
       history.reset({
-        title: next.name.replace(/\.pdf$/i, ""),
+        title: next.name.replace(/\.(pdf|docx)$/i, ""),
         definition: {
           ...result.definition,
           fields: result.definition.fields.map((item) => ({
@@ -528,7 +530,9 @@ export default function TemplateBuilder({
         },
       });
       setFile(next);
-      setOriginal(new Uint8Array(await next.arrayBuffer()));
+      setOriginal(result.render_pdf
+        ? Uint8Array.from(atob(result.render_pdf), (char) => char.charCodeAt(0))
+        : new Uint8Array(await next.arrayBuffer()));
       setCleaned(null);
       const first = firstEditableField(result.definition.fields);
       setSelected(first ? { kind: "field", id: first.id } : null);
@@ -542,15 +546,19 @@ export default function TemplateBuilder({
       copied.current = null;
     } catch (cause) {
       setError(
-        cause instanceof Error ? cause.message : "Could not analyze PDF",
+        cause instanceof Error ? cause.message : "Could not analyze document",
       );
     } finally {
       setBusy("");
     }
   };
-  const payload = () => {
+  const payload = (retainOriginal = false) => {
     const data = new FormData();
-    if (file) data.append("pdf", file);
+    if (retainOriginal) {
+      if (file) data.append("pdf", file);
+    } else if (original) {
+      data.append("pdf", new Blob([Uint8Array.from(original)], { type: "application/pdf" }), "review.pdf");
+    }
     data.append("definition_json", JSON.stringify(definition));
     return data;
   };
@@ -589,7 +597,7 @@ export default function TemplateBuilder({
     setBusy("Saving template revision…");
     setError("");
     try {
-      const data = payload();
+      const data = payload(true);
       data.append("title", title.trim());
       data.append("reviewed", "true");
       if (revisionId) data.append("expected_revision_id", revisionId);
@@ -654,7 +662,7 @@ export default function TemplateBuilder({
       return;
     }
     setBoxDragging(true);
-    const id = crypto.randomUUID(),
+    const id = createId(),
       box = {
         id,
         page,
@@ -1022,9 +1030,9 @@ export default function TemplateBuilder({
               if (next) void upload(next);
             }}
           >
-            <h2>Upload your report PDF</h2>
+            <h2>Upload your report PDF or Word document</h2>
             <p>
-              Export Excel sheets as PDF. Text, outlined boxes, and scanned
+              Choose a PDF or Word .docx file. Export Excel sheets as PDF. Text, outlined boxes, and scanned
               pages are supported.
             </p>
             <input
@@ -1032,8 +1040,8 @@ export default function TemplateBuilder({
               className="sr-only"
               type="file"
               tabIndex={-1}
-              aria-label="Upload report PDF"
-              accept="application/pdf"
+              aria-label="Upload report PDF or Word document"
+              accept="application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.pdf,.docx"
               onChange={(event) => {
                 const next = event.target.files?.[0];
                 if (next) void upload(next);
@@ -1152,6 +1160,22 @@ export default function TemplateBuilder({
                       />
                       Include in missing-field reminders
                     </label>
+                    {!["image", "calculated"].includes(field.kind) && (
+                      <label className="field-stack">
+                        <span>Default value for new reports</span>
+                        {field.kind === "text" || field.kind === "textarea" ? (
+                          <textarea rows={3} maxLength={20000}
+                            value={String(field.default_value ?? "")}
+                            onChange={(event) => updateField({ default_value: event.target.value })} />
+                        ) : (
+                          <Input type={field.kind === "number" ? "number" : field.kind === "date" ? "date" : "text"}
+                            step={field.kind === "number" ? "any" : undefined}
+                            value={String(field.default_value ?? "")}
+                            onChange={(event) => updateField({ default_value: event.target.value })} />
+                        )}
+                        <small>Used for new reports. Detected sample text is never copied automatically.</small>
+                      </label>
+                    )}
                     {field.kind === "select" && (
                       <label className="field-stack">
                         <span>Options, one per line</span>
@@ -1681,7 +1705,7 @@ export default function TemplateBuilder({
           file={cropImage.file}
           onCancel={() => setCropImage(null)}
           onComplete={(name, region: Region, text) => {
-            const id = crypto.randomUUID();
+            const id = createId();
             change((current) => ({
               ...current,
               extractions: [

@@ -1,12 +1,16 @@
 """Shared service for all user-uploaded report templates."""
 
 import json
+import base64
+import os
 import re
+from typing import Literal
+from secrets import compare_digest
 from contextlib import asynccontextmanager
 from io import BytesIO
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, JSONResponse
 from PIL import Image, UnidentifiedImageError
@@ -22,33 +26,60 @@ from .template_database import (
     Template,
     TemplateArchive,
     TemplateRevision,
+    TemplateSource,
     engine,
     get_db,
     init_db,
 )
-from .template_models import TemplateDefinition, TemplateReport, resolved_values
+from .template_models import TemplateDefinition, TemplateReport, resolved_values, template_defaults
 from .template_pdf import analyze_pdf, clean_pdf, generate_pdf, generate_field_layers
 from .report_configuration import FutureConfiguration
 from . import template_versions as versions
 from . import preview_assets
+from .deployment import is_cloud, validate_environment
+from .word_conversion import docx_to_pdf, ConverterUnavailable, DOCX_MIME
+from .template_word import generate_docx
 
 
 @asynccontextmanager
 async def lifespan(_app):
+    validate_environment()
     init_db()
     with Session(engine()) as db:
         versions.bootstrap(db)
     yield
 
 
-app = FastAPI(title="Shared PDF Template Service", lifespan=lifespan)
+app = FastAPI(
+    title="Shared PDF Template Service",
+    lifespan=lifespan,
+    docs_url=None if is_cloud() else "/docs",
+    redoc_url=None if is_cloud() else "/redoc",
+    openapi_url=None if is_cloud() else "/openapi.json",
+)
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?$",
+    # 0.0.0.0 can be opened on the hosting laptop, but other devices must use
+    # its real LAN IP. Keep this development allowance disabled in cloud mode.
+    allow_origin_regex=None if is_cloud() else r"^https?://(localhost|127\.0\.0\.1|0\.0\.0\.0|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?$",
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["Content-Type"],
     expose_headers=["Content-Disposition"],
 )
+
+
+@app.middleware("http")
+async def cloud_service_auth(request, call_next):
+    if is_cloud():
+        expected = os.environ.get("TEMPLATE_SERVICE_TOKEN", "")
+        supplied = request.headers.get("X-Template-Service-Token", "")
+        if len(expected) < 32 or not compare_digest(supplied.encode(), expected.encode()):
+            return JSONResponse({"detail": "Service authentication required"}, status_code=401, headers={"Cache-Control": "no-store"})
+    response = await call_next(request)
+    if is_cloud():
+        response.headers["Cache-Control"] = "private, no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
 
 
 def parse(model, payload):
@@ -73,6 +104,43 @@ async def read_pdf(file):
             415, "Upload a PDF file, including Excel sheets exported as PDF"
         )
     return payload
+
+
+async def read_template(file):
+    payload = await file.read(20 * 1024 * 1024 + 1)
+    if len(payload) > 20 * 1024 * 1024:
+        raise HTTPException(413, "Document exceeds the 20 MB limit")
+    filename = (file.filename or "template.pdf").replace("\\", "/").rsplit("/", 1)[-1][:255]
+    if payload.startswith(b"%PDF-"):
+        return "pdf", payload, payload, filename
+    if not filename.lower().endswith(".docx"):
+        raise HTTPException(415, "Upload a PDF or Word .docx document. Save older .doc files as .docx first.")
+    try:
+        converted = await run_in_threadpool(docx_to_pdf, payload)
+    except ConverterUnavailable as error:
+        raise HTTPException(503, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    return "docx", payload, converted, filename
+
+
+def source_info(db, revision):
+    record = db.execute(select(TemplateSource.format, TemplateSource.filename).where(TemplateSource.revision_id == revision.id)).first()
+    return {"source_format": record.format if record else "pdf", "source_filename": record.filename if record else "template.pdf"}
+
+
+def retain_source(db, revision, kind, payload, filename):
+    record = db.get(TemplateSource, revision.id)
+    if record is None:
+        record = TemplateSource(revision_id=revision.id)
+        db.add(record)
+    record.format, record.payload, record.filename = kind, payload, filename
+
+
+def document_response(payload, kind, title):
+    filename = re.sub(r"[^A-Za-z0-9 ._-]", "", title).strip() or "Report"
+    return Response(payload, media_type=DOCX_MIME if kind == "docx" else "application/pdf",
+                    headers={"Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{filename}.{kind}"'})
 
 
 def template_or_404(db, template_id):
@@ -110,6 +178,7 @@ def summary(template):
 def revision_detail(db, template, revision):
     return {
         **summary(template),
+        **source_info(db, revision),
         "definition": revision.definition,
         "revision_id": revision.id,
         "revision_number": revision.number,
@@ -194,9 +263,10 @@ def health(db: Session = Depends(get_db)):
 
 @app.post("/api/templates/analyze")
 async def analyze(pdf: UploadFile = File(...)):
-    payload = await read_pdf(pdf)
+    kind, _, payload, _ = await read_template(pdf)
     try:
-        return analyze_pdf(payload)
+        result = await run_in_threadpool(analyze_pdf, payload)
+        return {**result, "source_format": kind, "render_pdf": base64.b64encode(payload).decode() if kind == "docx" else None}
     except Exception as error:
         raise HTTPException(422, str(error) or "Could not analyze PDF") from error
 
@@ -205,7 +275,8 @@ async def analyze(pdf: UploadFile = File(...)):
 async def review(pdf: UploadFile = File(...), definition_json: str = Form(...)):
     definition = parse(TemplateDefinition, definition_json)
     try:
-        blank, _ = clean_pdf(await read_pdf(pdf), definition)
+        _, _, source, _ = await read_template(pdf)
+        blank, _ = await run_in_threadpool(clean_pdf, source, definition)
         return Response(
             blank, media_type="application/pdf", headers={"Cache-Control": "no-store"}
         )
@@ -227,9 +298,9 @@ async def create_template(
         raise HTTPException(
             422, "Review the template and add at least one field before saving"
         )
-    source = await read_pdf(pdf)
+    kind, original, source, filename = await read_template(pdf)
     try:
-        blank, thumbnail = clean_pdf(source, definition)
+        blank, thumbnail = await run_in_threadpool(clean_pdf, source, definition)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
     # Sample values are review hints, never defaults for future reports.
@@ -246,6 +317,7 @@ async def create_template(
     db.add(template)
     db.flush()
     revision = versions.snapshot(db, template, 1)
+    retain_source(db, revision, kind, original, filename)
     db.commit()
     db.refresh(template)
     return revision_detail(db, template, revision)
@@ -320,8 +392,10 @@ def save_report_defaults(
 
 
 @app.get("/api/templates/{template_id}/drafts/{draft_id}/pdf")
+@app.get("/api/templates/{template_id}/drafts/{draft_id}/download")
 async def download_draft_pdf(
-    template_id: str, draft_id: str, db: Session = Depends(get_db)
+    template_id: str, draft_id: str, db: Session = Depends(get_db),
+    output_format: Literal["pdf", "docx", "original"] = Query("pdf", alias="format"),
 ):
     template = template_or_404(db, template_id)
     draft = draft_or_404(db, template_id, draft_id)
@@ -334,9 +408,10 @@ async def download_draft_pdf(
         )
     }
     db.commit()
+    kind = source_info(db, revision)["source_format"] if output_format == "original" else output_format
     try:
         pdf = await run_in_threadpool(
-            generate_pdf,
+            generate_docx if kind == "docx" else generate_pdf,
             revision.blank_pdf,
             TemplateDefinition.model_validate(revision.definition),
             report,
@@ -344,15 +419,7 @@ async def download_draft_pdf(
         )
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
-    filename = re.sub(r"[^A-Za-z0-9 ._-]", "", draft.title).strip() or "Report"
-    return Response(
-        pdf,
-        media_type="application/pdf",
-        headers={
-            "Cache-Control": "no-store",
-            "Content-Disposition": f'attachment; filename="{filename}.pdf"',
-        },
-    )
+    return document_response(pdf, kind, draft.title)
 
 
 @app.get("/api/templates")
@@ -415,9 +482,10 @@ async def edit_template(
     definition = parse(TemplateDefinition, definition_json)
     if not definition.fields:
         raise HTTPException(422, "Review the template before saving")
-    source = await read_pdf(pdf) if pdf else template.source_pdf
+    uploaded_source = await read_template(pdf) if pdf else None
+    source = uploaded_source[2] if uploaded_source else template.source_pdf
     try:
-        blank, thumbnail = clean_pdf(source, definition)
+        blank, thumbnail = await run_in_threadpool(clean_pdf, source, definition)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
     # Pin every legacy draft before changing the current template.
@@ -432,6 +500,9 @@ async def edit_template(
     )
     template.blank_pdf, template.thumbnail = blank, thumbnail
     revision = versions.snapshot(db, template, previous.number + 1)
+    if uploaded_source:
+        kind, original, _, filename = uploaded_source
+        retain_source(db, revision, kind, original, filename)
     db.commit()
     return revision_detail(db, template, revision)
 
@@ -466,6 +537,7 @@ def delete_archived_template(template_id: str, confirmed: bool = False, db: Sess
     db.execute(delete(DraftImage).where(DraftImage.draft_id.in_(draft_ids)))
     db.execute(delete(DraftRevision).where(DraftRevision.draft_id.in_(draft_ids)))
     db.execute(delete(Draft).where(Draft.template_id == template_id))
+    db.execute(delete(TemplateSource).where(TemplateSource.revision_id.in_(select(TemplateRevision.id).where(TemplateRevision.template_id == template_id))))
     db.execute(delete(TemplateRevision).where(TemplateRevision.template_id == template_id))
     db.execute(delete(TemplateArchive).where(TemplateArchive.template_id == template_id))
     db.delete(template)
@@ -479,6 +551,16 @@ def source(template_id: str, db: Session = Depends(get_db)):
     return Response(
         template_or_404(db, template_id).source_pdf, media_type="application/pdf"
     )
+
+
+@app.get("/api/templates/{template_id}/original")
+def original_source(template_id: str, revision_id: str | None = None, db: Session = Depends(get_db)):
+    template = template_or_404(db, template_id)
+    revision = versions.resolve(db, template, revision_id)
+    record = db.get(TemplateSource, revision.id)
+    db.commit()
+    return document_response(record.payload if record else revision.source_pdf,
+                             record.format if record else "pdf", template.title + "-original")
 
 
 class TitleUpdate(BaseModel):
@@ -570,6 +652,8 @@ async def persist_draft(
     definition = TemplateDefinition.model_validate(revision.definition)
     report = parse(TemplateReport, report_json)
     report.title = title_required(report.title)
+    if existing is None:
+        report.values = {**template_defaults(definition), **report.values}
     try:
         report.validate_for(definition)
     except (ValueError, TypeError) as error:
@@ -664,6 +748,7 @@ async def render(
     revision_id=None,
     asset_token=None,
     layered=False,
+    output_format="pdf",
 ):
     template = template_or_404(db, template_id)
     revision = versions.resolve(db, template, revision_id)
@@ -676,6 +761,7 @@ async def render(
     except (ValueError, TypeError) as error:
         raise HTTPException(422, str(error)) from error
     uploaded = await image_uploads(definition, images, image_fields)
+    kind = source_info(db, revision)["source_format"] if output_format == "original" else output_format
     if asset_token and not download:
         if uploaded:
             raise HTTPException(422, "Use cached or uploaded preview images, not both")
@@ -685,7 +771,7 @@ async def render(
             result = await run_in_threadpool(generate_field_layers, definition, report, {key: item[0] for key, item in uploaded.items()})
             return JSONResponse(result, headers={"Cache-Control":"no-store"})
         payload = await run_in_threadpool(
-            generate_pdf,
+            generate_docx if kind == "docx" else generate_pdf,
             revision.blank_pdf,
             definition,
             report,
@@ -693,10 +779,9 @@ async def render(
         )
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
-    filename = re.sub(r"[^A-Za-z0-9 ._-]", "", report.title).strip() or "Report"
     headers = {"Cache-Control": "no-store"}
     if download:
-        headers["Content-Disposition"] = f'attachment; filename="{filename}.pdf"'
+        return document_response(payload, kind, report.title)
     return Response(payload, media_type="application/pdf", headers=headers)
 
 
@@ -747,7 +832,9 @@ async def generate(
     image_fields: str = Form("[]"),
     revision_id: str = Form(""),
     db: Session = Depends(get_db),
+    output_format: Literal["pdf", "docx", "original"] = Query("pdf", alias="format"),
 ):
     return await render(
-        template_id, report_json, images, image_fields, db, True, revision_id
+        template_id, report_json, images, image_fields, db, True, revision_id,
+        output_format=output_format,
     )

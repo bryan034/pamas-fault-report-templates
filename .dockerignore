@@ -3,9 +3,17 @@ dist
 .next
 .vinext
 .wrangler
+**/.wrangler
+.sites-runtime
+deploy
+docs
+tests
 .npm-cache
 .git
 .env*
+.dev.vars*
+.local-https
+backend-secrets*.json
 backend/.venv
 backend/.pytest_cache
 backend/__pycache__
@@ -16,6 +24,7 @@ work
 .playwright
 test-results
 playwright-report
+tmp
 backend/.uv-cache
 backend/.uv-tool
 public/ocr

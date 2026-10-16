@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import {
   ArrowLeft,
   Download,
@@ -50,8 +50,9 @@ import {
 } from "@/lib/template-api";
 import { readPhotos } from "@/lib/template-image-ocr";
 import { extractQuotedReading } from "@/lib/template-ocr";
-import { extractedValue, fieldsInPageOrder } from "@/lib/template-editing";
+import { extractedValue, fieldsInPageOrder, nextReportField } from "@/lib/template-editing";
 import { calculationProblems } from "@/lib/template-calculations";
+import { createId } from "@/lib/create-id";
 
 export default function TemplateEditor({
   templateId,
@@ -72,7 +73,7 @@ export default function TemplateEditor({
   const [template, setTemplate] = useState<TemplateDetail | null>(
       sandbox?.template || null,
     ),
-    [report, setReport] = useState<TemplateReport>(emptyReport);
+    [report, setReport] = useState<TemplateReport>(() => emptyReport(sandbox?.template.definition));
   const [images, setImages] = useState<Record<string, File>>({}),
     [imageUrls, setImageUrls] = useState<Record<string, string>>({});
   const [companies, setCompanies] = useState<string[]>([]),
@@ -105,6 +106,18 @@ export default function TemplateEditor({
   const [titleRequired, setTitleRequired] = useState(false);
   const titleInput = useRef<HTMLInputElement>(null);
   const workspace = useRef<HTMLDivElement>(null);
+  const pendingTextSelection = useRef<{ id: string; position: number } | null>(null);
+  useLayoutEffect(() => {
+    const selection = pendingTextSelection.current;
+    if (!selection) return;
+    const textarea = workspace.current?.querySelector<HTMLTextAreaElement>(
+      `[data-sidebar-field="${CSS.escape(selection.id)}"] textarea`,
+    );
+    if (!textarea) return;
+    pendingTextSelection.current = null;
+    textarea.focus({ preventScroll: true });
+    textarea.setSelectionRange(selection.position, selection.position);
+  }, [report.values]);
   const [configurationDialog, setConfigurationDialog] = useState(false);
   const configurationBaseline = useRef(
     JSON.stringify(reportConfiguration(emptyReport())),
@@ -164,6 +177,8 @@ export default function TemplateEditor({
           );
           setImages(files);
           setActiveDraft(draft.id);
+        } else {
+          setReport(emptyReport(t.definition));
         }
         if (!cancelled) setLoading(false);
       } catch (cause) {
@@ -302,8 +317,8 @@ export default function TemplateEditor({
   );
   const calcIssues = useMemo(
     () =>
-      template ? calculationProblems(template.definition, report.values) : [],
-    [template, report.values],
+      template ? calculationProblems(template.definition, values) : [],
+    [template, values],
   );
   const calcProblemIds = new Set(calcIssues.flatMap((issue) => issue.fieldIds));
   const extractedItems = useMemo(
@@ -358,6 +373,31 @@ export default function TemplateEditor({
         readings_confirmed: confirmed,
       };
     });
+  };
+  const fieldKeyDown = (event: KeyboardEvent<HTMLElement>, id: string, field?: TemplateField) => {
+    if (!template || event.key !== "Enter" || event.nativeEvent.isComposing || event.ctrlKey || event.metaKey || event.altKey) return;
+    const control = event.target;
+    if (!(control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement || control instanceof HTMLSelectElement)) return;
+    if (event.shiftKey) {
+      if (field && ["text", "textarea"].includes(field.kind) && control instanceof HTMLInputElement) {
+        event.preventDefault();
+        const start = control.selectionStart ?? control.value.length;
+        const end = control.selectionEnd ?? start;
+        const nextValue = control.value.slice(0, start) + "\n" + control.value.slice(end);
+        // Restore the caret in the replacement textarea during this commit,
+        // before the next keypress (an animation frame can race fast typing).
+        pendingTextSelection.current = { id: field.id, position: start + 1 };
+        setValue(field, nextValue);
+      }
+      return; // Textareas insert their own newline; date/number fields stay typed.
+    }
+    event.preventDefault();
+    const next = nextReportField(template.definition.fields, report.layout, id);
+    if (!next) return;
+    setSelectedField(next.id);
+    const container = workspace.current?.querySelector<HTMLElement>(`[data-sidebar-field="${CSS.escape(next.id)}"]`);
+    container?.querySelector<HTMLElement>("input, textarea, select")?.focus({ preventScroll: true });
+    revealSidebarField(workspace.current, next.id);
   };
   const runOcr = async (fieldId: string, file: File, version: number) => {
     const rules =
@@ -612,10 +652,10 @@ export default function TemplateEditor({
       setSaving(false);
     }
   };
-  const download = async () => {
+  const download = async (format: "pdf" | "docx" | "original" = "pdf") => {
     setDownloading(true);
     try {
-      const response = await templateRequest(`${base}/generate`, {
+      const response = await templateRequest(`${base}/generate?format=${format}`, {
         method: "POST",
         body: reportPayload(report, images, template?.revision_id),
       });
@@ -623,11 +663,11 @@ export default function TemplateEditor({
         response.headers
           .get("Content-Disposition")
           ?.match(/filename="([^"]+)"/)?.[1] ||
-        `${report.title.trim() || "Report"}.pdf`;
+        `${report.title.trim() || "Report"}.${format === "original" ? template?.source_format || "pdf" : format}`;
       downloadBlob(await response.blob(), filename);
     } catch (cause) {
       setNotice(
-        cause instanceof Error ? cause.message : "Could not download PDF",
+        cause instanceof Error ? cause.message : "Could not download report",
       );
     } finally {
       setDownloading(false);
@@ -636,7 +676,7 @@ export default function TemplateEditor({
   const reset = () => {
     for (const key of Object.keys(images))
       imageVersions.current[key] = (imageVersions.current[key] || 0) + 1;
-    setReport(emptyReport());
+    setReport(emptyReport(template?.definition));
     setImages({});
     setOcrNotes({});
     setResetOpen(false);
@@ -749,6 +789,20 @@ export default function TemplateEditor({
               >
                 <Download size={16} /> Download PDF
               </Button>
+              <Button
+                variant="outline"
+                className={missing.length ? "download-incomplete" : ""}
+                onClick={() => void download("docx")}
+                disabled={downloading || Boolean(imageBusy)}
+                title="Fixed-layout Word export with editable report values"
+              >
+                <Download size={16} /> Download Word
+              </Button>
+              <Button variant="outline" onClick={() => void download("original")}
+                disabled={downloading || Boolean(imageBusy)}
+                title="Download this report in its source template's file type">
+                Download original format ({(template.source_format || "pdf").toUpperCase()})
+              </Button>
             </>
           )}{" "}
         </div>
@@ -762,6 +816,7 @@ export default function TemplateEditor({
         <aside className="template-sidebar">
           <label
             data-sidebar-field="report_title"
+            onKeyDown={(event) => fieldKeyDown(event, "report_title")}
             className={`field-stack${!report.title.trim() ? " is-empty" : ""}`}
           >
             <span>Report title</span>
@@ -785,7 +840,7 @@ export default function TemplateEditor({
               ))}
             </div>
           )}
-          {fieldsInPageOrder(template.definition.fields, report.layout).map(
+          {fieldsInPageOrder(template.definition.fields, report.layout).filter((field) => field.kind !== "calculated").map(
             (field) => {
               const value = values[field.id] ?? "";
               const blank =
@@ -942,6 +997,7 @@ export default function TemplateEditor({
                   <label
                     key={field.id}
                     data-sidebar-field={field.id}
+                    onKeyDown={(event) => fieldKeyDown(event, field.id, field)}
                     data-preview-active={
                       selectedField === field.id || undefined
                     }
@@ -969,6 +1025,7 @@ export default function TemplateEditor({
                   onFocus={() => setSelectedField(field.id)}
                   key={field.id}
                   data-sidebar-field={field.id}
+                  onKeyDown={(event) => fieldKeyDown(event, field.id, field)}
                   data-preview-active={selectedField === field.id || undefined}
                   onDragOver={(event) => event.preventDefault()}
                   onDrop={(event) => {
@@ -979,16 +1036,19 @@ export default function TemplateEditor({
                 >
                   <span>
                     {field.label}
-                    {field.kind === "calculated" ? " (calculated)" : ""}
                   </span>
-                  {field.kind === "textarea" ? (
+                  {field.kind === "textarea" || (field.kind === "text" && String(value).includes("\n")) ? (
                     <textarea
+                      aria-label={field.label}
                       rows={4}
+                      maxLength={20000}
+                      style={{ textAlign: report.styles[field.id]?.alignment ?? field.alignment }}
                       value={String(value)}
                       onChange={(event) => setValue(field, event.target.value)}
                     />
                   ) : field.kind === "select" ? (
                     <select
+                      aria-label={field.label}
                       value={String(value)}
                       onChange={(event) => setValue(field, event.target.value)}
                     >
@@ -999,6 +1059,8 @@ export default function TemplateEditor({
                     </select>
                   ) : (
                     <Input
+                      aria-label={field.label}
+                      style={{ textAlign: report.styles[field.id]?.alignment ?? field.alignment }}
                       aria-invalid={calcProblemIds.has(field.id)}
                       type={
                         field.kind === "number"
@@ -1011,7 +1073,6 @@ export default function TemplateEditor({
                       }
                       step={field.kind === "number" ? "any" : undefined}
                       value={String(value)}
-                      readOnly={field.kind === "calculated"}
                       list={
                         field.role === "company"
                           ? `companies-${field.id}`
@@ -1128,7 +1189,7 @@ export default function TemplateEditor({
           onCancel={() => setCropImage(null)}
           onComplete={(name, region, text) => {
             const item: Extraction = {
-              id: crypto.randomUUID(),
+              id: createId(),
               image_field: cropImage.fieldId,
               name,
               region,

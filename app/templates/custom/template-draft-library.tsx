@@ -147,9 +147,9 @@ export default function TemplateDraftLibrary({
       setNotice(cause instanceof Error ? cause.message : "Download failed");
     }
   };
-  const downloadDraft = async (draft: CustomDraftSummary) => {
+  const downloadDraft = async (draft: CustomDraftSummary, format: "pdf" | "docx" | "original" = "pdf") => {
     try {
-      const response = await templateRequest(`${base}/drafts/${draft.id}/pdf`);
+      const response = await templateRequest(`${base}/drafts/${draft.id}/download?format=${format}`);
       const filename =
         response.headers
           .get("Content-Disposition")
@@ -193,6 +193,12 @@ export default function TemplateDraftLibrary({
           >
             Download blank PDF
           </Button>
+          <Button variant="outline" size="sm" onClick={async () => {
+            try {
+              const response = await templateRequest(`${base}/original`);
+              downloadBlob(await response.blob(), response.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1] || `template.${template?.source_format || "pdf"}`);
+            } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Download failed"); }
+          }}>Download original template</Button>
           {!template?.archived && (
             <>
               <Button asChild size="sm">
@@ -330,6 +336,12 @@ export default function TemplateDraftLibrary({
                         >
                           <Download size={16} />
                         </Button>
+                        <Button variant="ghost" size="sm"
+                          aria-label={`Download Word ${draft.title}`}
+                          onClick={() => void downloadDraft(draft, "docx")}>Word</Button>
+                        <Button variant="ghost" size="sm"
+                          aria-label={`Download original format ${draft.title}`}
+                          onClick={() => void downloadDraft(draft, "original")}>Original</Button>
                         <Button
                           variant="ghost"
                           size="icon"

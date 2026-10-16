@@ -187,7 +187,8 @@ test("report sidebar follows PDF position and scrolls independently; resize, cur
   ).toHaveAttribute("aria-invalid", "true");
   await page.getByLabel("Rated current", { exact: true }).fill("60");
   await expect(page.locator(".calculation-errors")).toHaveCount(0);
-  await expect(page.getByLabel("Load (calculated)")).toHaveValue("50%");
+  await expect(page.getByLabel("Load (calculated)")).toHaveCount(0);
+  await expect(page.getByLabel("Rendered value: Load", { exact: true })).toHaveCount(1);
   await expect(
     page.getByRole("button", { name: "Arrange layout", exact: true }),
   ).toHaveCount(0);

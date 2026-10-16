@@ -12,3 +12,4 @@ class FieldStyle(BaseModel):
     ) = None
     font_size: float | None = Field(default=None, ge=4, le=72)
     color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+    alignment: Literal["left", "center", "right"] | None = None

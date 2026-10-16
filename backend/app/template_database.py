@@ -15,6 +15,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 from sqlalchemy.types import JSON
+from .deployment import is_cloud, validate_environment
 
 
 class Base(DeclarativeBase):
@@ -86,6 +87,22 @@ class DraftRevision(Base):
     revision_id: Mapped[str] = mapped_column(ForeignKey("template_revisions.id"))
 
 
+class TemplateSource(Base):
+    """Original upload retained separately from the canonical editor PDF.
+
+    Additive table: older PDF templates need no destructive column migration.
+    Each source follows its immutable template revision.
+    """
+
+    __tablename__ = "template_sources"
+    revision_id: Mapped[str] = mapped_column(
+        ForeignKey("template_revisions.id"), primary_key=True
+    )
+    filename: Mapped[str] = mapped_column(String(255))
+    format: Mapped[str] = mapped_column(String(8))
+    payload: Mapped[bytes] = mapped_column(LargeBinary)
+
+
 class TemplateArchive(Base):
     __tablename__ = "template_archives"
     template_id: Mapped[str] = mapped_column(
@@ -100,11 +117,28 @@ _engine = None
 def engine():
     global _engine
     if _engine is None:
+        validate_environment()
         url = os.environ.get(
             "TEMPLATE_DATABASE_URL",
             "postgresql+psycopg://templates:templates@127.0.0.1:5434/templates",
         )
-        _engine = create_engine(url, pool_pre_ping=True)
+        options = {"pool_pre_ping": True}
+        if is_cloud():
+            # Small bounded pool per Python process. Use Supabase's session
+            # pooler (5432), not transaction mode (6543).
+            options.update(
+                pool_size=3,
+                max_overflow=2,
+                pool_recycle=300,
+                pool_timeout=15,
+                connect_args={"connect_timeout": 10},
+                execution_options={
+                    "schema_translate_map": {
+                        None: os.environ["TEMPLATE_DATABASE_SCHEMA"]
+                    }
+                },
+            )
+        _engine = create_engine(url, **options)
     return _engine
 
 

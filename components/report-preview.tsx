@@ -25,9 +25,11 @@ import {
   handlePoint,
   resizeBox,
   tickPath,
+  nextReportField,
   type Edge,
 } from "@/lib/template-editing";
 import { extractionMime } from "@/components/image-extraction";
+import { createId } from "@/lib/create-id";
 
 export const reportFonts = [
   ["Times-Roman", "Times New Roman"],
@@ -154,6 +156,7 @@ export default function ReportPreview({
         font: override?.font ?? field.font,
         font_size: override?.font_size ?? field.font_size,
         color: override?.color ?? field.color,
+        alignment: override?.alignment ?? field.alignment,
       }
     : null;
   const [fontKey, setFontKey] = useState("");
@@ -332,7 +335,7 @@ export default function ReportPreview({
     } else {
       if (report.rectangles.length >= 100) return;
       const next: Rectangle = {
-        id: crypto.randomUUID(),
+        id: createId(),
         page,
         kind: mode === "tick" ? "tick" : "rectangle",
         x: Math.min(p.x, 0.96),
@@ -547,6 +550,16 @@ export default function ReportPreview({
             <option key={size} value={size} />
           ))}
         </datalist>
+        <label>
+          Alignment{" "}
+          <select aria-label="Report text alignment" value={style?.alignment || "center"}
+            disabled={!field || field.kind === "image"}
+            onChange={(event) => updateStyle({ alignment: event.target.value as "left" | "center" | "right" })}>
+            <option value="left">Left</option>
+            <option value="center">Center</option>
+            <option value="right">Right</option>
+          </select>
+        </label>
         <label>
           Font colour{" "}
           <input
@@ -841,7 +854,7 @@ export default function ReportPreview({
                     Courier: '"Courier New",monospace',
                   };
                   const font = override?.font ?? item.font,
-                    value = report.values[item.id] ?? "";
+                    value = report.values[item.id] ?? item.default_value ?? "";
                   const common = {
                     autoFocus: true,
                     maxLength: 20000,
@@ -857,6 +870,13 @@ export default function ReportPreview({
                       if (event.key === "Escape") {
                         event.preventDefault();
                         clearSelection();
+                      } else if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && !event.nativeEvent.isComposing) {
+                        event.preventDefault();
+                        const next = nextReportField(definition.fields, report.layout, item.id);
+                        if (next) {
+                          activate(next.id);
+                          setEditing(next.id);
+                        }
                       }
                     },
                     style: {
@@ -864,7 +884,7 @@ export default function ReportPreview({
                       fontWeight: font.includes("Bold") ? 700 : 400,
                       fontSize: `${((override?.font_size ?? item.font_size) * 100) / size.width}cqw`,
                       color: override?.color ?? item.color,
-                      textAlign: item.alignment,
+                      textAlign: override?.alignment ?? item.alignment,
                     },
                   };
                   return (

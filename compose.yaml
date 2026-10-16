@@ -1,10 +1,29 @@
 services:
+  https:
+    image: caddy:2-alpine
+    ports:
+      - "0.0.0.0:5173:5173"
+    env_file:
+      - path: ./.local-https/hosts.env
+        required: false
+    volumes:
+      - ./deploy/local/Caddyfile:/etc/caddy/Caddyfile:ro
+      - local-https-data:/data
+      - local-https-config:/config
+    depends_on:
+      web:
+        condition: service_started
+      template-service:
+        condition: service_healthy
+    restart: unless-stopped
+
   web:
     build:
       context: .
       dockerfile: Dockerfile.web
     ports:
-      - "0.0.0.0:5173:8787"
+      # Loopback-only HTTP fallback; Wi-Fi clients use the HTTPS gateway.
+      - "127.0.0.1:5175:8787"
     depends_on:
       template-service:
         condition: service_healthy
@@ -18,7 +37,7 @@ services:
     environment:
       TEMPLATE_DATABASE_URL: postgresql+psycopg://templates:${FAULT_REPORT_DB_PASSWORD:?Set FAULT_REPORT_DB_PASSWORD in .env}@template-db:5432/templates
     ports:
-      - "0.0.0.0:8001:8000"
+      - "127.0.0.1:8001:8000"
     depends_on:
       template-db:
         condition: service_healthy
@@ -49,3 +68,5 @@ services:
 
 volumes:
   template-postgres:
+  local-https-data:
+  local-https-config:

@@ -1,7 +1,11 @@
+.env*
+.dev.vars*
 .venv
+.pytest_cache
 .uv-cache
 .uv-tool
-.pytest_cache
 __pycache__
+**/__pycache__
 tests
-scripts
+*.dump
+*.sqlite

@@ -6,7 +6,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import defer, load_only
 
-from .template_database import Draft, DraftRevision, Template, TemplateRevision
+from .template_database import Draft, DraftRevision, Template, TemplateRevision, TemplateSource
 
 
 def latest_revision(db, template):
@@ -25,6 +25,11 @@ def latest_revision(db, template):
 
 
 def snapshot(db, template, number):
+    previous = db.scalar(
+        select(TemplateSource).join(TemplateRevision)
+        .where(TemplateRevision.template_id == template.id)
+        .order_by(TemplateRevision.number.desc()).limit(1)
+    )
     revision = TemplateRevision(
         id=str(uuid4()),
         template_id=template.id,
@@ -36,6 +41,10 @@ def snapshot(db, template, number):
     )
     db.add(revision)
     db.flush()
+    if previous is not None:
+        db.add(TemplateSource(revision_id=revision.id, filename=previous.filename,
+                              format=previous.format, payload=previous.payload))
+        db.flush()
     return revision
 
 

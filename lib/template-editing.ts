@@ -71,6 +71,16 @@ export function firstEditableField(fields: TemplateField[]) {
   );
 }
 
+/** Enter follows the same visual order as the report sidebar, skipping outputs/photos. */
+export function nextReportField(
+  fields: TemplateField[], layout: Record<string, PageBox>, current: string,
+) {
+  const editable = fieldsInPageOrder(fields, layout)
+    .filter((field) => !["image", "calculated"].includes(field.kind));
+  const index = current === "report_title" ? -1 : editable.findIndex((field) => field.id === current);
+  return index < -1 || (index === -1 && current !== "report_title") ? undefined : editable[index + 1];
+}
+
 // A curved, tapered vector checkmark, shared by both live editors and PDF renderers.
 export const tickPath =
   "M .04 .48 C .11 .36 .18 .40 .24 .63 C .32 .44 .60 .10 .94 .02 C .69 .20 .45 .57 .28 .98 C .23 .99 .19 .96 .17 .89 C .14 .70 .10 .48 .04 .48 Z";

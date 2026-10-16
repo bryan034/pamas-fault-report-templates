@@ -27,6 +27,7 @@ export type TemplateField = PageBox & {
     fields: string[];
   } | null;
   suggested_value: string;
+  default_value?: string | boolean;
 };
 export type ClearArea = PageBox & { id: string; color: string };
 export type OcrMapping = {
@@ -58,6 +59,8 @@ export type TemplateSummary = {
   field_count: number;
   created_at: string;
   archived?: boolean;
+  source_format?: "pdf" | "docx";
+  source_filename?: string;
 };
 export type TemplateDetail = TemplateSummary & {
   definition: Definition;
@@ -86,6 +89,7 @@ export type FieldStyle = {
   font?: string | null;
   font_size?: number | null;
   color?: string | null;
+  alignment?: "left" | "center" | "right" | null;
 };
 export type FieldLayers = {
   pdf: string | null;
@@ -105,9 +109,16 @@ export type CustomDraftDetail = CustomDraftSummary & {
   form: TemplateReport;
   images: { field_id: string; filename: string; media_type: string }[];
 };
-export const emptyReport = (): TemplateReport => ({
+export function templateDefaults(definition?: Definition): TemplateReport["values"] {
+  return Object.fromEntries((definition?.fields || [])
+    .filter((field) => !["image", "calculated"].includes(field.kind) &&
+      field.default_value !== undefined && field.default_value !== "")
+    .map((field) => [field.id, field.default_value!]));
+}
+
+export const emptyReport = (definition?: Definition): TemplateReport => ({
   title: "",
-  values: {},
+  values: templateDefaults(definition),
   layout: {},
   styles: {},
   rectangles: [],
@@ -117,8 +128,12 @@ export const emptyReport = (): TemplateReport => ({
 });
 
 export function templateApiBase(): string {
+  // An explicitly empty value selects same-origin /api routes on Cloudflare.
+  const configured = process.env.NEXT_PUBLIC_TEMPLATE_API_BASE_URL;
+  if (configured !== undefined) return configured.replace(/\/$/, "");
+  // Local HTTPS gateway routes both UI and API through one trusted origin.
+  if (window.location.protocol === "https:") return window.location.origin;
   return (
-    process.env.NEXT_PUBLIC_TEMPLATE_API_BASE_URL ||
     `${window.location.protocol}//${window.location.hostname}:8001`
   );
 }
@@ -134,10 +149,12 @@ export async function templateRequest(
     if (error instanceof DOMException && error.name === "AbortError")
       throw error;
     throw new Error(
-      "Cannot reach the shared template service. Start Docker Compose and check port 8001.",
+      "Cannot reach the template service. Check your connection and sign-in, then retry. For local development, check Docker Compose and port 8001.",
     );
   }
   if (!response.ok) {
+    if (response.status === 401 || response.status === 403)
+      throw new Error("Your session expired or access was denied. Reload the page to sign in again.");
     const problem = (await response.json().catch(() => null)) as {
       detail?: string | { msg: string }[];
     } | null;
@@ -180,6 +197,7 @@ export function calculateValues(
   definition: Definition,
   values: TemplateReport["values"],
 ): TemplateReport["values"] {
+  values = { ...templateDefaults(definition), ...values };
   const result = { ...values };
   for (const field of definition.fields) {
     if (field.kind !== "calculated" || !field.calculation) continue;
