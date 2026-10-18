@@ -1,7 +1,7 @@
 {
   "version": 1,
   "title": "Report Formatter",
-  "summary": "Turns PDF and Word documents into reusable report templates with browser OCR, calculated fields, revision-safe drafts, and PDF/DOCX exports, using a shared editor and Python rendering service.",
+  "summary": "A private templated document management platform designed for a client's internal company use, with reusable PDF/Word templates, OCR-assisted reporting, and revision-safe drafts; prepared for production access through Cloudflare Tunnel and Access with administrator-managed membership.",
   "category": "Document automation",
   "role": "Product designer and implementation reviewer",
   "technologies": [
@@ -14,7 +14,9 @@
     "ReportLab",
     "pdfplumber",
     "python-docx",
-    "LibreOffice Writer"
+    "LibreOffice Writer",
+    "Cloudflare Tunnel",
+    "Cloudflare Access"
   ],
   "status": "Independent project",
   "featured": true,
