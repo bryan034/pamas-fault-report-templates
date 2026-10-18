@@ -65,11 +65,12 @@ test("same-origin API proxy preserves multipart bodies, downloads and paths, str
   body.append("report_json", '{"title":"Private report"}');
   body.append("images", new File(["image bytes"], "photo.png", { type: "image/png" }));
   const result = await handleWebRequest(request("/api/templates/id/generate?test=1", { method: "POST", body,
-    headers: { Origin: "https://reports.example.com", Cookie: "CF_Authorization=private", "Cf-Access-Jwt-Assertion": "private", Authorization: "Bearer private", "X-Template-Service-Token": "forged" } }),
+    headers: { Origin: "https://reports.example.com", Cookie: "CF_Authorization=private", "Cf-Access-Jwt-Assertion": "private", Authorization: "Bearer private", "X-Template-Service-Token": "forged", "X-Template-User-Email": "owner@example.com" } }),
   { ...settings, TEMPLATE_API: { fetch: async (forwarded) => {
     assert.equal(new URL(forwarded.url).pathname, "/api/templates/id/generate");
     assert.equal(new URL(forwarded.url).search, "?test=1");
     for (const name of ["cookie", "authorization", "cf-access-jwt-assertion", "x-template-service-token"]) assert.equal(forwarded.headers.get(name), null);
+    assert.equal(forwarded.headers.get("X-Template-User-Email"), "member@example.com");
     const parsed = await forwarded.formData();
     assert.equal(parsed.get("report_json"), '{"title":"Private report"}');
     assert.equal(await parsed.get("images").text(), "image bytes");
@@ -88,13 +89,59 @@ test("cross-origin writes are rejected and service failures do not expose secret
   const result = await handleWebRequest(request("/api/templates"), env, async () => new Response(), approved);
   assert.equal(result.status, 503);
   assert.doesNotMatch(await result.text(), /secret-password/);
-  assert.equal((await handleWebRequest(request("/templates/new"), env, async () => new Response("editor"), approved)).status, 200);
+  assert.equal((await handleWebRequest(request("/templates/new"), env, async () => new Response("editor"), approved)).status, 503);
+});
+
+test("verified Google identity still needs an owner grant before pages or assets render", async () => {
+  let rendered = 0;
+  let granted = false;
+  const env = {...settings, TEMPLATE_API: {fetch: async (forwarded) => {
+    assert.equal(new URL(forwarded.url).pathname, "/api/access/me");
+    assert.equal(forwarded.method, "GET");
+    assert.equal(forwarded.headers.get("X-Template-User-Email"), "member@example.com");
+    for (const name of ["cookie", "cf-access-jwt-assertion", "x-template-service-token"])
+      assert.equal(forwarded.headers.get(name), null);
+    return granted ? Response.json({mode: "cloudflare", email: "member@example.com", role: "viewer"})
+      : Response.json({detail: "Ask owner"}, {status: 403});
+  }}};
+  const frontend = async () => { rendered++; return new Response("Private application"); };
+  for (const path of ["/", "/templates/new", "/access", "/ocr/eng.traineddata.gz"]) {
+    const result = await handleWebRequest(request(path), env, frontend, approved);
+    assert.equal(result.status, 403);
+    assert.equal(result.headers.get("Cache-Control"), "private, no-store");
+  }
+  assert.equal(rendered, 0);
+  granted = true;
+  assert.equal((await handleWebRequest(request(), env, frontend, approved)).status, 200);
+  assert.equal(rendered, 1);
+  // Revoke without changing the Access token: the next request must be denied.
+  granted = false;
+  assert.equal((await handleWebRequest(request(), env, frontend, approved)).status, 403);
+  assert.equal(rendered, 1);
+});
+
+test("page membership lookup fails closed on invalid identity/roles, redirects or service errors", async () => {
+  for (const value of [
+    {mode: "cloudflare", email: "other@example.com", role: "owner"},
+    {mode: "local", email: "member@example.com", role: "editor"},
+    {mode: "cloudflare", email: "member@example.com", role: "unknown"},
+  ]) {
+    const response = await handleWebRequest(request(), {...settings, TEMPLATE_API: {fetch: async () => Response.json(value)}},
+      async () => { throw new Error("Must not render"); }, approved);
+    assert.equal(response.status, 503);
+  }
+  for (const status of [302, 500, 503]) {
+    const response = await handleWebRequest(request(), {...settings, TEMPLATE_API: {fetch: async () => new Response("postgres://private", {status})}},
+      async () => { throw new Error("Must not render"); }, approved);
+    assert.equal(response.status, 503);
+    assert.doesNotMatch(await response.text(), /private/);
+  }
 });
 
 test("cloud backend requires TLS, private schema, explicit environment and service token", () => {
-  const env = { TEMPLATE_DATABASE_URL: "postgresql+psycopg://user:password@host/db?sslmode=require", TEMPLATE_DATABASE_SCHEMA: "report_formatter", TEMPLATE_ENVIRONMENT: "staging", TEMPLATE_SERVICE_TOKEN: "x".repeat(40) };
+  const env = { TEMPLATE_DATABASE_URL: "postgresql+psycopg://user:password@host/db?sslmode=require", TEMPLATE_DATABASE_SCHEMA: "report_formatter", TEMPLATE_ENVIRONMENT: "staging", TEMPLATE_SERVICE_TOKEN: "x".repeat(40), TEMPLATE_OWNER_EMAIL: "owner@example.com" };
   assert.deepEqual(containerEnvironment(env), env);
-  for (const change of [{ TEMPLATE_DATABASE_URL: "" }, { TEMPLATE_DATABASE_URL: "postgresql+psycopg://host/db" }, { TEMPLATE_DATABASE_SCHEMA: "x; DROP SCHEMA public" }, { TEMPLATE_SERVICE_TOKEN: "short" }, { TEMPLATE_ENVIRONMENT: "local" }])
+  for (const change of [{ TEMPLATE_OWNER_EMAIL: "" }, { TEMPLATE_DATABASE_URL: "" }, { TEMPLATE_DATABASE_URL: "postgresql+psycopg://host/db" }, { TEMPLATE_DATABASE_SCHEMA: "x; DROP SCHEMA public" }, { TEMPLATE_SERVICE_TOKEN: "short" }, { TEMPLATE_ENVIRONMENT: "local" }])
     assert.throws(() => containerEnvironment({ ...env, ...change }));
 });
 

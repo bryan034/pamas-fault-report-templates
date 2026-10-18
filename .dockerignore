@@ -12,7 +12,7 @@ tests
 .git
 .env*
 .dev.vars*
-.local-https
+.cloudflared
 backend-secrets*.json
 backend/.venv
 backend/.pytest_cache

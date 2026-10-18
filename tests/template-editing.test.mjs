@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   duplicateBox,
+  selectionBoxes,
+  moveBoxes,
   fieldsInPageOrder,
   firstEditableField,
   resizeBox,
@@ -67,6 +69,33 @@ test("copy/paste keeps styles and matching cover but gives them a new ID and rem
   );
   assert.equal(cover.clear_areas[0].x, 0.8);
   assert.equal(definition.clear_areas.length, 0);
+});
+test("pasting an older uncovered text or image field creates an attached cover with exact geometry", () => {
+  for (const kind of ["text", "image"]) {
+    const source = {...definition.fields[0], kind};
+    const copy = duplicateBox(definition, {kind: "field", box: source}, "pasted");
+    const pasted = copy.fields.at(-1), cover = copy.clear_areas.at(-1);
+    for (const key of ["id", "page", "x", "y", "width", "height"])
+      assert.equal(cover[key], pasted[key]);
+    assert.equal(cover.color, "#ffffff");
+  }
+});
+test("selection deduplicates attached covers and group movement preserves spacing, colour and page bounds", () => {
+  const schema = {...definition, clear_areas: [{...definition.fields[0], color: "#ffffff"}]};
+  const boxes = selectionBoxes(schema, [
+    {kind: "field", id: "n1"}, {kind: "cover", id: "n1"},
+    {kind: "field", id: "n2"}, {kind: "field", id: "n2"}, {kind: "cover", id: "missing"},
+  ]);
+  assert.equal(boxes.length, 2);
+  const moved = moveBoxes(schema, boxes, 1, -1);
+  assert.ok(Math.abs(moved.fields[1].x + moved.fields[1].width - 1) < 1e-9);
+  assert.ok(Math.abs(moved.fields[1].x - moved.fields[0].x - 0.3) < 1e-9);
+  assert.equal(moved.fields[0].y, 0);
+  assert.equal(moved.clear_areas[0].color, "#ffffff");
+  assert.equal(moved.clear_areas[0].x, moved.fields[0].x);
+  assert.equal(moved.clear_areas[0].y, moved.fields[0].y);
+  assert.equal(schema.fields[0].x, 0.1);
+  assert.equal(moveBoxes(schema, [], 1, 1), schema);
 });
 test("sidebar reading order uses page, vertical position, horizontal position and report overrides", () => {
   const fields = [

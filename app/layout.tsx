@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { ApplicationAccess } from "@/components/application-access";
 
 export const metadata: Metadata = {
   title: "Report Formatter",
@@ -20,7 +21,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className="antialiased">{children}</body>
+      <body className="antialiased"><ApplicationAccess>{children}</ApplicationAccess></body>
     </html>
   );
 }

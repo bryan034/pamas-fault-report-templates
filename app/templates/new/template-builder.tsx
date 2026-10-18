@@ -4,7 +4,12 @@ import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { ArrowLeft, ImagePlus, Plus, Redo2, Undo2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle,
+  AlertDialogDescription, AlertDialogFooter } from "@/components/ui/alert-dialog";
 import TemplatePdfViewer from "@/components/template-pdf-viewer";
+import TemplateDefaultPreview, {
+  templateDefaultText,
+} from "@/components/template-default-preview";
 import ImageExtraction, {
   ExtractionItems,
   extractionMime,
@@ -28,6 +33,8 @@ import {
   handlePoint,
   resizeBox,
   duplicateBox,
+  selectionBoxes,
+  moveBoxes,
   firstEditableField,
   type CopiedBox,
   type Edge,
@@ -45,9 +52,14 @@ type Gesture = {
   origin: PageBox;
   action: "draw" | "move" | Edge;
   recorded: boolean;
+  group?: CopiedBox[];
 };
 const clamp = (n: number, min: number, max: number) =>
   Math.min(max, Math.max(min, n));
+function openSavedTemplate(id: string) {
+  // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- Full navigation avoids this project's Vinext Link runtime mismatch.
+  window.location.assign(`/templates/custom/${id}`);
+}
 const kinds: FieldKind[] = ["text", "number", "date", "image", "calculated"];
 const fonts = [
   ["Times-Roman", "Times New Roman"],
@@ -82,8 +94,10 @@ export default function TemplateBuilder({
   const [file, setFile] = useState<File | null>(null),
     [busy, setBusy] = useState(""),
     [error, setError] = useState("");
-  const [selected, setSelected] = useState<Selection | null>(null),
-    [mode, setMode] = useState<"input" | "image" | "cover" | null>(null);
+  const [selections, setSelections] = useState<Selection[]>([]);
+  const selected = selections.at(-1) || null;
+  const setSelected = (selection: Selection | null) => setSelections(selection ? [selection] : []);
+  const [mode, setMode] = useState<"input" | "image" | "cover" | null>(null);
   const [coverOnly, setCoverOnly] = useState(false),
     [dirty, setDirty] = useState(false);
   const [saved, setSaved] = useState<TemplateDetail | null>(null),
@@ -104,10 +118,12 @@ export default function TemplateBuilder({
     key: "default:16",
     value: "16",
   });
+  const labelInput = useRef<HTMLInputElement>(null);
+  const nameNewField = useRef<string | null>(null);
   const drag = useRef<Gesture | null>(null),
     uploadInput = useRef<HTMLInputElement>(null),
     savedId = useRef<string | null>(null);
-  const copied = useRef<CopiedBox | null>(null);
+  const copied = useRef<CopiedBox[] | null>(null);
   const pasteCount = useRef(0);
   const issues = definition ? calculationProblems(definition) : [];
   const problemIds = new Set(issues.flatMap((issue) => issue.fieldIds));
@@ -122,6 +138,21 @@ export default function TemplateBuilder({
     selected?.kind === "field"
       ? (selectedBox as TemplateField | undefined)
       : undefined;
+
+  useEffect(() => {
+    if (boxDragging || !nameNewField.current || field?.id !== nameNewField.current) return;
+    labelInput.current?.focus();
+    labelInput.current?.select();
+    nameNewField.current = null;
+  }, [boxDragging, field?.id]);
+
+  useEffect(() => {
+    if (!saved) return;
+    const timer = window.setTimeout(() => {
+      openSavedTemplate(saved.id);
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [saved]);
 
   const extractionField =
     definition?.fields.find(
@@ -349,6 +380,9 @@ export default function TemplateBuilder({
               fields: current.fields.map((item) =>
                 item.id === selection.id ? { ...item, ...updates } : item,
               ),
+              clear_areas: current.clear_areas.map((item) =>
+                item.id === selection.id ? { ...item, ...updates } : item,
+              ),
             }
           : {
               ...current,
@@ -360,30 +394,25 @@ export default function TemplateBuilder({
     );
   const remove = () => {
     if (!selected || busy) return;
-    change((current) =>
-      selected.kind === "cover"
-        ? {
+    const fieldIds = new Set(selections.filter(item => item.kind === "field").map(item => item.id));
+    const coverIds = new Set(selections.map(item => item.id));
+    change((current) => ({
             ...current,
-            clear_areas: current.clear_areas.filter(
-              (item) => item.id !== selected.id,
-            ),
-          }
-        : {
-            ...current,
-            fields: current.fields.filter((item) => item.id !== selected.id),
+            fields: current.fields.filter((item) => !fieldIds.has(item.id)),
+            clear_areas: current.clear_areas.filter((item) => !coverIds.has(item.id)),
             ocr_mappings: current.ocr_mappings.filter(
               (item) =>
-                item.image_field !== selected.id &&
-                item.target_field !== selected.id,
+                !fieldIds.has(item.image_field) &&
+                !fieldIds.has(item.target_field),
             ),
             extractions: current.extractions
-              .filter((item) => item.image_field !== selected.id)
+              .filter((item) => !fieldIds.has(item.image_field))
               .map((item) =>
-                item.target_field === selected.id
+                item.target_field && fieldIds.has(item.target_field)
                   ? { ...item, target_field: null }
                   : item,
               ),
-          },
+          }),
     );
     setSelected(null);
   };
@@ -425,14 +454,7 @@ export default function TemplateBuilder({
         !window.getSelection()?.toString()
       ) {
         event.preventDefault();
-        copied.current = structuredClone({
-          kind: selected.kind,
-          box: selectedBox,
-          cover:
-            selected.kind === "field"
-              ? definition.clear_areas.find((item) => item.id === selected.id)
-              : undefined,
-        }) as CopiedBox;
+        copied.current = structuredClone(selectionBoxes(definition, selections));
         pasteCount.current = 0;
         return;
       }
@@ -444,20 +466,21 @@ export default function TemplateBuilder({
         event.preventDefault();
         const snapshot = copied.current;
         if (
-          (snapshot.kind === "field" && definition.fields.length >= 300) ||
-          definition.clear_areas.length >= 400
+          definition.fields.length + snapshot.filter(item => item.kind === "field").length > 300 ||
+          definition.clear_areas.length + snapshot.length > 400
         ) {
           setError("Template box limit reached.");
           return;
         }
-        const id = createId();
+        const next = snapshot.map(item => ({kind: item.kind, id: createId()}));
         pasteCount.current += 1;
         change((current) =>
-          duplicateBox(current, snapshot, id, 0.015 * pasteCount.current),
+          snapshot.reduce((value, item, index) =>
+            duplicateBox(value, item, next[index].id, 0.015 * pasteCount.current), current),
         );
-        setSelected({ kind: snapshot.kind, id });
+        setSelections(next);
         setMode(null);
-        setCoverOnly(snapshot.kind === "cover");
+        setCoverOnly(snapshot.every(item => item.kind === "cover"));
         return;
       }
       if (event.key === "Escape") {
@@ -484,7 +507,9 @@ export default function TemplateBuilder({
             : event.key === "ArrowDown"
               ? delta
               : 0) / size.height;
-        updateBox(
+        if (!event.altKey && selections.length > 1) {
+          change(current => moveBoxes(current, selectionBoxes(current, selections), dx, dy));
+        } else updateBox(
           selected,
           event.altKey
             ? resizeBox(selectedBox, "se", dx, dy)
@@ -500,14 +525,20 @@ export default function TemplateBuilder({
   });
   const upload = async (next: File) => {
     if (!/\.(pdf|docx)$/i.test(next.name)) {
-      setError("Upload a PDF or Word .docx file. Save older .doc files as .docx first.");
+      setError(
+        "Upload a PDF or Word .docx file. Save older .doc files as .docx first.",
+      );
       return;
     }
     if (next.size > 20 * 1024 * 1024) {
       setError("Document exceeds the 20 MB limit.");
       return;
     }
-    setBusy(/\.docx$/i.test(next.name) ? "Converting Word document and analyzing fields…" : "Analyzing PDF…");
+    setBusy(
+      /\.docx$/i.test(next.name)
+        ? "Converting Word document and analyzing fields…"
+        : "Analyzing PDF…",
+    );
     setError("");
     try {
       const data = new FormData();
@@ -530,9 +561,13 @@ export default function TemplateBuilder({
         },
       });
       setFile(next);
-      setOriginal(result.render_pdf
-        ? Uint8Array.from(atob(result.render_pdf), (char) => char.charCodeAt(0))
-        : new Uint8Array(await next.arrayBuffer()));
+      setOriginal(
+        result.render_pdf
+          ? Uint8Array.from(atob(result.render_pdf), (char) =>
+              char.charCodeAt(0),
+            )
+          : new Uint8Array(await next.arrayBuffer()),
+      );
       setCleaned(null);
       const first = firstEditableField(result.definition.fields);
       setSelected(first ? { kind: "field", id: first.id } : null);
@@ -557,7 +592,11 @@ export default function TemplateBuilder({
     if (retainOriginal) {
       if (file) data.append("pdf", file);
     } else if (original) {
-      data.append("pdf", new Blob([Uint8Array.from(original)], { type: "application/pdf" }), "review.pdf");
+      data.append(
+        "pdf",
+        new Blob([Uint8Array.from(original)], { type: "application/pdf" }),
+        "review.pdf",
+      );
     }
     data.append("definition_json", JSON.stringify(definition));
     return data;
@@ -643,8 +682,17 @@ export default function TemplateBuilder({
         selection.kind === "field" ? definition.fields : definition.clear_areas
       ).find((item) => item.id === selection.id);
       if (!box) return;
+      const alreadySelected = selections.some(item => item.id === selection.id && item.kind === selection.kind);
+      if (event.ctrlKey || event.metaKey) {
+        event.preventDefault();
+        setSelections(current => alreadySelected
+          ? current.filter(item => item.id !== selection.id || item.kind !== selection.kind)
+          : [...current, selection]);
+        return;
+      }
+      const group = alreadySelected ? selections : [selection];
       setBoxDragging(true);
-      setSelected(selection);
+      setSelections([...group.filter(item => item.id !== selection.id || item.kind !== selection.kind), selection]);
       if (selection.kind === "field" && "kind" in box && box.kind === "image")
         setExtractionImage(box.id);
       drag.current = {
@@ -654,11 +702,17 @@ export default function TemplateBuilder({
         origin: box,
         action: edge || "move",
         recorded: false,
+        group: selectionBoxes(definition, group),
       };
       return;
     }
     if (!mode) {
       setSelected(null);
+      return;
+    }
+    if ((mode !== "cover" && definition.fields.length >= 300) ||
+        definition.clear_areas.length >= 400) {
+      setError("Template box limit reached.");
       return;
     }
     setBoxDragging(true);
@@ -681,6 +735,7 @@ export default function TemplateBuilder({
           }
         : {
             ...current,
+            clear_areas: [...current.clear_areas, { ...box, color: "#ffffff" }],
             fields: [
               ...current.fields,
               {
@@ -714,6 +769,11 @@ export default function TemplateBuilder({
     if (!gesture) return;
     const p = point(event),
       box = gesture.origin;
+    if (gesture.action === "move" && gesture.group && gesture.group.length > 1) {
+      change(current => moveBoxes(current, gesture.group!, p.x - gesture.start.x, p.y - gesture.start.y), !gesture.recorded);
+      gesture.recorded = true;
+      return;
+    }
     const updates =
       gesture.action === "draw"
         ? {
@@ -737,6 +797,9 @@ export default function TemplateBuilder({
     gesture.recorded = true;
   };
   const finish = () => {
+    const gesture = drag.current;
+    if (gesture?.action === "draw" && gesture.selection.kind === "field")
+      nameNewField.current = gesture.selection.id;
     drag.current = null;
     setBoxDragging(false);
     setMode(null);
@@ -914,6 +977,21 @@ export default function TemplateBuilder({
             ),
           )}
         </datalist>
+        <label>
+          Alignment{" "}
+          <select
+            aria-label="Selected field alignment"
+            value={field?.alignment || "center"}
+            disabled={!field || field.kind === "image"}
+            onChange={(event) => updateField({
+              alignment: event.target.value as TemplateField["alignment"],
+            })}
+          >
+            <option value="left">Left</option>
+            <option value="center">Centre</option>
+            <option value="right">Right</option>
+          </select>
+        </label>
         <label className="font-color-control">
           <span>A</span>
           <input
@@ -998,26 +1076,7 @@ export default function TemplateBuilder({
       </header>
       {saved ? (
         <section className="catalog-content">
-          <h2>{saved.title} is ready</h2>
-          <p>
-            Saved revision {saved.revision_number}. Existing reports keep their
-            original revision.
-          </p>
-          <div className="template-toolbar">
-            <Button
-              variant="outline"
-              className="bg-transparent"
-              onClick={() => {
-                setSaved(null);
-                setCleaned(null);
-              }}
-            >
-              Back to editing
-            </Button>
-            <Button asChild>
-              <a href={`/templates/custom/${saved.id}`}>Open template</a>
-            </Button>
-          </div>
+          <p>Opening {saved.title}…</p>
         </section>
       ) : !definition ? (
         <section className="catalog-content">
@@ -1032,8 +1091,8 @@ export default function TemplateBuilder({
           >
             <h2>Upload your report PDF or Word document</h2>
             <p>
-              Choose a PDF or Word .docx file. Export Excel sheets as PDF. Text, outlined boxes, and scanned
-              pages are supported.
+              Choose a PDF or Word .docx file. Export Excel sheets as PDF. Text,
+              outlined boxes, and scanned pages are supported.
             </p>
             <input
               ref={uploadInput}
@@ -1129,11 +1188,18 @@ export default function TemplateBuilder({
                     <label className="field-stack">
                       <span>Field label</span>
                       <Input
+                        ref={labelInput}
                         value={field.label}
                         maxLength={160}
                         onChange={(event) =>
                           updateField({ label: event.target.value })
                         }
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+                            event.preventDefault();
+                            event.currentTarget.blur();
+                          }
+                        }}
                       />
                     </label>
                     <label className="field-stack">
@@ -1160,20 +1226,54 @@ export default function TemplateBuilder({
                       />
                       Include in missing-field reminders
                     </label>
+                    {field.kind !== "image" && (
+                      <label className="field-stack">
+                        <span>Text alignment</span>
+                        <select
+                          aria-label="Template text alignment"
+                          value={field.alignment}
+                          onChange={(event) => updateField({
+                            alignment: event.target.value as TemplateField["alignment"],
+                          })}
+                        >
+                          <option value="left">Left</option>
+                          <option value="center">Centre</option>
+                          <option value="right">Right</option>
+                        </select>
+                      </label>
+                    )}
                     {!["image", "calculated"].includes(field.kind) && (
                       <label className="field-stack">
                         <span>Default value for new reports</span>
                         {field.kind === "text" || field.kind === "textarea" ? (
-                          <textarea rows={3} maxLength={20000}
+                          <textarea
+                            rows={3}
+                            maxLength={20000}
                             value={String(field.default_value ?? "")}
-                            onChange={(event) => updateField({ default_value: event.target.value })} />
+                            onChange={(event) =>
+                              updateField({ default_value: event.target.value })
+                            }
+                          />
                         ) : (
-                          <Input type={field.kind === "number" ? "number" : field.kind === "date" ? "date" : "text"}
+                          <Input
+                            type={
+                              field.kind === "number"
+                                ? "number"
+                                : field.kind === "date"
+                                  ? "date"
+                                  : "text"
+                            }
                             step={field.kind === "number" ? "any" : undefined}
                             value={String(field.default_value ?? "")}
-                            onChange={(event) => updateField({ default_value: event.target.value })} />
+                            onChange={(event) =>
+                              updateField({ default_value: event.target.value })
+                            }
+                          />
                         )}
-                        <small>Used for new reports. Detected sample text is never copied automatically.</small>
+                        <small>
+                          Used for new reports. Detected sample text is never
+                          copied automatically.
+                        </small>
                       </label>
                     )}
                     {field.kind === "select" && (
@@ -1561,7 +1661,24 @@ export default function TemplateBuilder({
               source={cleaned || original}
               overlay={
                 cleaned
-                  ? undefined
+                  ? (page) => (
+                      <svg
+                        className="template-default-layer"
+                        viewBox="0 0 1 1"
+                        preserveAspectRatio="none"
+                        aria-label={`Template defaults, page ${page + 1}`}
+                      >
+                        {definition.fields
+                          .filter((item) => item.page === page)
+                          .map((item) => (
+                            <TemplateDefaultPreview
+                              key={item.id}
+                              field={item}
+                              page={definition.pages[page]}
+                            />
+                          ))}
+                      </svg>
+                    )
                   : (page) => (
                       <svg
                         className="template-box-layer"
@@ -1572,6 +1689,7 @@ export default function TemplateBuilder({
                         onPointerMove={move}
                         onPointerUp={finish}
                         onPointerCancel={finish}
+                        onContextMenu={(event) => { if (event.ctrlKey) event.preventDefault(); }}
                         aria-label={`Template field review, page ${page + 1}`}
                       >
                         {[
@@ -1585,7 +1703,7 @@ export default function TemplateBuilder({
                             : []),
                         ].map(({ box, kind }) => {
                           const active =
-                              selected?.id === box.id && selected.kind === kind,
+                              selections.some(item => item.id === box.id && item.kind === kind),
                             selection = { id: box.id, kind };
                           const boxField =
                             kind === "field" ? (box as TemplateField) : null;
@@ -1594,6 +1712,7 @@ export default function TemplateBuilder({
                               key={`${kind}-${box.id}`}
                               data-box-id={box.id}
                               data-box-kind={kind}
+                              data-selected={active || undefined}
                               onDragOver={(event) => {
                                 if (kind === "field") event.preventDefault();
                               }}
@@ -1634,11 +1753,21 @@ export default function TemplateBuilder({
                                   start(event, page, selection)
                                 }
                               />
-                              {boxField && (
+                              {boxField && templateDefaultText(boxField) && (
+                                <TemplateDefaultPreview
+                                  field={boxField}
+                                  page={definition.pages[page]}
+                                />
+                              )}
+                              {boxField && !templateDefaultText(boxField) && (
                                 <text
-                                  x={box.x + box.width / 2}
+                                  x={box.x + (boxField.alignment === "left"
+                                    ? Math.min(.01, box.width * .05)
+                                    : boxField.alignment === "right"
+                                      ? box.width - Math.min(.01, box.width * .05)
+                                      : box.width / 2)}
                                   y={box.y + box.height / 2}
-                                  textAnchor="middle"
+                                  textAnchor={boxField.alignment === "left" ? "start" : boxField.alignment === "right" ? "end" : "middle"}
                                   dominantBaseline="middle"
                                   fill={boxField.color}
                                   fontFamily={
@@ -1695,6 +1824,19 @@ export default function TemplateBuilder({
           {busy}
         </div>
       )}
+      <AlertDialog open={!!saved} onOpenChange={(open) => {
+        if (!open && saved) openSavedTemplate(saved.id);
+      }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Template saved successfully</AlertDialogTitle>
+            <AlertDialogDescription>Opening your template. You can create new reports there.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <Button onClick={() => saved && openSavedTemplate(saved.id)}>Open template</Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       {error && (
         <div className="feedback-toast" role="alert">
           {error}

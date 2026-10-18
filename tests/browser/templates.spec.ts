@@ -210,9 +210,10 @@ test("ribbon, resize edges, keyboard deletion and five-step undo, covers, image 
     .getByRole("button", { name: "Save template", exact: true })
     .click();
   await expect(
-    page.getByRole("heading", { name: "Inspection is ready" }),
+    page.getByRole("heading", { name: "Template saved successfully" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Back to editing" }).click();
+  await page.waitForURL(/\/templates\/custom\/[^/]+$/);
+  await page.getByRole("link", { name: "Edit template", exact: true }).click();
   await page
     .getByLabel("Template name", { exact: true })
     .fill("Inspection revised");
@@ -223,9 +224,9 @@ test("ribbon, resize edges, keyboard deletion and five-step undo, covers, image 
     .getByRole("button", { name: "Save template", exact: true })
     .click();
   await expect(
-    page.getByText("Saved revision 2.", { exact: false }),
+    page.getByRole("heading", { name: "Template saved successfully" }),
   ).toBeVisible();
-  await page.getByRole("link", { name: "Open template", exact: true }).click();
+  await page.waitForURL(/\/templates\/custom\/[^/]+$/);
   await expect(
     page.getByRole("link", { name: "Edit template", exact: true }),
   ).toBeVisible();

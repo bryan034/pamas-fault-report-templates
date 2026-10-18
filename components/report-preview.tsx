@@ -113,6 +113,24 @@ export default function ReportPreview({
     [stroke, setStroke] = useState(3),
     [fontDraft, setFontDraft] = useState("");
   const gesture = useRef<Gesture | null>(null);
+  const tools = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const panel = tools.current?.closest<HTMLElement>(".report-shell");
+    const header = panel?.querySelector<HTMLElement>(":scope > .topbar");
+    if (!header || !panel) return;
+    const update = () =>
+      panel.style.setProperty(
+        "--report-header-height",
+        `${header.getBoundingClientRect().height}px`,
+      );
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(header);
+    return () => {
+      observer.disconnect();
+      panel.style.removeProperty("--report-header-height");
+    };
+  }, []);
   const fieldId = activeField === undefined ? localField : activeField;
   const activate = (id: string | null) => {
     setLocalField(id);
@@ -138,7 +156,7 @@ export default function ReportPreview({
       }
       if (
         target.closest(
-          "[data-field-id],[data-shape-id],[data-inline-editor],.report-font-toolbar,.report-preview-heading button",
+          "[data-field-id],[data-shape-id],[data-inline-editor],.report-preview-tools",
         )
       )
         return;
@@ -412,11 +430,7 @@ export default function ReportPreview({
     if (current?.kind === "draw") setMode("normal");
     if (current?.kind === "field" && !current.edge && !current.moved) {
       const item = definition.fields.find((field) => field.id === current.id);
-      if (
-        item &&
-        !["image", "calculated"].includes(item.kind) &&
-        onValue
-      )
+      if (item && !["image", "calculated"].includes(item.kind) && onValue)
         setEditing(item.id);
     }
     gesture.current = null;
@@ -443,164 +457,140 @@ export default function ReportPreview({
   };
   return (
     <div className="report-preview-editor">
-      <div className="template-preview-heading report-preview-heading">
-        <div>
-          <strong>Live PDF preview</strong>
-          <p>
-            {error ||
-              renderError ||
-              (busy || rendering
-                ? "Updating from your current fields…"
-                : "Click a field to type; drag its box or handles to move or resize. Click outside to deselect.")}
-          </p>
-        </div>
-        <div className="template-toolbar">
-          <Button
-            size="sm"
-            variant={mode === "rectangle" ? "default" : "outline"}
-            onClick={() => {
-              setEditing(null);
-              activate(null);
-              setSelected(null);
-              setMode(mode === "rectangle" ? "normal" : "rectangle");
-            }}
-          >
-            <RectangleHorizontal size={14} />
-            {mode === "rectangle" ? "Finish drawing" : "Draw rectangle"}
-          </Button>
-          <Button
-            size="sm"
-            variant={mode === "tick" ? "default" : "outline"}
-            onClick={() => {
-              setEditing(null);
-              activate(null);
-              setSelected(null);
-              setMode(mode === "tick" ? "normal" : "tick");
-            }}
-          >
-            <Check size={14} />
-            {mode === "tick" ? "Cancel tick" : "Insert tick"}
-          </Button>
-        </div>
-      </div>
-      <div
-        className="report-font-toolbar"
-        role="toolbar"
-        aria-label="Report field formatting"
-      >
-        <label>
-          Field{" "}
-          <select
-            aria-label="Format report field"
-            value={fieldId || ""}
-            onChange={(event) => {
-              setEditing(null);
-              setSelected(null);
-              activate(event.target.value || null);
-            }}
-          >
-            <option value="">Select a field</option>
-            {definition.fields
-              .filter((item) => item.kind !== "image")
-              .map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.label}
+      <div className="report-preview-tools" ref={tools}>
+          <div className="report-shape-toolbar">
+            <Button
+              size="sm"
+              variant={mode === "rectangle" ? "default" : "outline"}
+              onClick={() => {
+                setEditing(null);
+                activate(null);
+                setSelected(null);
+                setMode(mode === "rectangle" ? "normal" : "rectangle");
+              }}
+            >
+              <RectangleHorizontal size={14} />
+              {mode === "rectangle" ? "Finish drawing" : "Draw rectangle"}
+            </Button>
+            <Button
+              size="sm"
+              variant={mode === "tick" ? "default" : "outline"}
+              onClick={() => {
+                setEditing(null);
+                activate(null);
+                setSelected(null);
+                setMode(mode === "tick" ? "normal" : "tick");
+              }}
+            >
+              <Check size={14} />
+              {mode === "tick" ? "Cancel tick" : "Insert tick"}
+            </Button>
+          </div>
+        <div
+          className="report-font-toolbar"
+          role="toolbar"
+          aria-label="Report field formatting"
+        >
+          <label>
+            Font{" "}
+            <select
+              aria-label="Report font"
+              value={style?.font || "Times-Roman"}
+              disabled={!field || field.kind === "image"}
+              onChange={(event) => updateStyle({ font: event.target.value })}
+            >
+              {reportFonts.map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
                 </option>
               ))}
-          </select>
-        </label>
-        <label>
-          Font{" "}
-          <select
-            aria-label="Report font"
-            value={style?.font || "Times-Roman"}
-            disabled={!field || field.kind === "image"}
-            onChange={(event) => updateStyle({ font: event.target.value })}
-          >
-            {reportFonts.map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Font size{" "}
-          <Input
-            aria-label="Report font size"
-            list="report-font-sizes"
-            inputMode="decimal"
-            disabled={!field || field.kind === "image"}
-            value={
-              fontKey === effectiveKey
-                ? fontDraft
-                : String(style?.font_size || 16)
-            }
-            onChange={(event) => {
-              setFontKey(effectiveKey);
-              setFontDraft(event.target.value);
-              const size = Number(event.target.value);
-              if (size >= 4 && size <= 72) updateStyle({ font_size: size });
-            }}
-            onBlur={() => setFontKey("")}
-          />
-        </label>
-        <datalist id="report-font-sizes">
-          {[8, 10, 12, 14, 16, 18, 20, 24, 28, 36, 48, 72].map((size) => (
-            <option key={size} value={size} />
-          ))}
-        </datalist>
-        <label>
-          Alignment{" "}
-          <select aria-label="Report text alignment" value={style?.alignment || "center"}
-            disabled={!field || field.kind === "image"}
-            onChange={(event) => updateStyle({ alignment: event.target.value as "left" | "center" | "right" })}>
-            <option value="left">Left</option>
-            <option value="center">Center</option>
-            <option value="right">Right</option>
-          </select>
-        </label>
-        <label>
-          Font colour{" "}
-          <input
-            aria-label="Report font color"
-            type="color"
-            value={style?.color || "#000000"}
-            disabled={!field || field.kind === "image"}
-            onChange={(event) => updateStyle({ color: event.target.value })}
-          />
-        </label>
-        <label>
-          Shape colour{" "}
-          <input
-            aria-label="Shape color"
-            type="color"
-            value={color}
-            onChange={(event) => {
-              setColor(event.target.value);
-              shapeUpdate({ color: event.target.value });
-            }}
-          />
-        </label>
-        {(mode === "rectangle" ||
-          report.rectangles.find((item) => item.id === selected)?.kind ===
-            "rectangle") && (
+            </select>
+          </label>
           <label>
-            Line width{" "}
-            <input
-              aria-label="Shape line width"
-              type="range"
-              min=".5"
-              max="12"
-              step=".5"
-              value={stroke}
+            Size{" "}
+            <Input
+              aria-label="Report font size"
+              list="report-font-sizes"
+              inputMode="decimal"
+              disabled={!field || field.kind === "image"}
+              value={
+                fontKey === effectiveKey
+                  ? fontDraft
+                  : String(style?.font_size || 16)
+              }
               onChange={(event) => {
-                setStroke(Number(event.target.value));
-                shapeUpdate({ stroke_width: Number(event.target.value) });
+                setFontKey(effectiveKey);
+                setFontDraft(event.target.value);
+                const size = Number(event.target.value);
+                if (size >= 4 && size <= 72) updateStyle({ font_size: size });
+              }}
+              onBlur={() => setFontKey("")}
+            />
+          </label>
+          <datalist id="report-font-sizes">
+            {[8, 10, 12, 14, 16, 18, 20, 24, 28, 36, 48, 72].map((size) => (
+              <option key={size} value={size} />
+            ))}
+          </datalist>
+          <label>
+            Alignment{" "}
+            <select
+              aria-label="Report text alignment"
+              value={style?.alignment || "center"}
+              disabled={!field || field.kind === "image"}
+              onChange={(event) =>
+                updateStyle({
+                  alignment: event.target.value as "left" | "center" | "right",
+                })
+              }
+            >
+              <option value="left">Left</option>
+              <option value="center">Center</option>
+              <option value="right">Right</option>
+            </select>
+          </label>
+          <label>
+            Text{" "}
+            <input
+              aria-label="Report font color"
+              type="color"
+              value={style?.color || "#000000"}
+              disabled={!field || field.kind === "image"}
+              onChange={(event) => updateStyle({ color: event.target.value })}
+            />
+          </label>
+          <label>
+            Shape{" "}
+            <input
+              aria-label="Shape color"
+              type="color"
+              value={color}
+              onChange={(event) => {
+                setColor(event.target.value);
+                shapeUpdate({ color: event.target.value });
               }}
             />
           </label>
-        )}
+          {(mode === "rectangle" ||
+            report.rectangles.find((item) => item.id === selected)?.kind ===
+              "rectangle") && (
+            <label>
+              Line width{" "}
+              <input
+                aria-label="Shape line width"
+                type="range"
+                min=".5"
+                max="12"
+                step=".5"
+                value={stroke}
+                onChange={(event) => {
+                  setStroke(Number(event.target.value));
+                  shapeUpdate({ stroke_width: Number(event.target.value) });
+                }}
+              />
+            </label>
+          )}
+        </div>
       </div>
       {(error || renderError) && (
         <p className="catalog-error" role="alert">
@@ -870,9 +860,20 @@ export default function ReportPreview({
                       if (event.key === "Escape") {
                         event.preventDefault();
                         clearSelection();
-                      } else if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && !event.nativeEvent.isComposing) {
+                      } else if (
+                        event.key === "Enter" &&
+                        !event.shiftKey &&
+                        !event.ctrlKey &&
+                        !event.metaKey &&
+                        !event.altKey &&
+                        !event.nativeEvent.isComposing
+                      ) {
                         event.preventDefault();
-                        const next = nextReportField(definition.fields, report.layout, item.id);
+                        const next = nextReportField(
+                          definition.fields,
+                          report.layout,
+                          item.id,
+                        );
                         if (next) {
                           activate(next.id);
                           setEditing(next.id);

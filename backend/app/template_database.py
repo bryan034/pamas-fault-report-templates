@@ -26,6 +26,16 @@ def now():
     return datetime.now(timezone.utc)
 
 
+class ApplicationUser(Base):
+    """Application-wide grants. The single owner is configured outside the DB."""
+
+    __tablename__ = "application_users"
+    email: Mapped[str] = mapped_column(String(254), primary_key=True)
+    role: Mapped[str] = mapped_column(String(12))
+    updated_by: Mapped[str] = mapped_column(String(254))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
 class Template(Base):
     __tablename__ = "templates"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)

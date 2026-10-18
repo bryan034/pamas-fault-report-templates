@@ -1,0 +1,36 @@
+# Optional overlay: keep the app/database on this laptop, protect remote access.
+# Run through npm run dev:tunnel after configuring Access and .env.tunnel.
+services:
+  web:
+    networks: [default, protected-tunnel]
+
+  template-service:
+    networks: [default, protected-tunnel]
+    environment:
+      TEMPLATE_ACCESS_MODE: cloudflare
+      TEMPLATE_OWNER_EMAIL: ${TEMPLATE_OWNER_EMAIL:?Set the main owner email in .env.tunnel}
+      ACCESS_TEAM_DOMAIN: ${ACCESS_TEAM_DOMAIN:?Set your Access team domain in .env.tunnel}
+      ACCESS_AUD: ${ACCESS_AUD:?Set the Access application AUD in .env.tunnel}
+      TEMPLATE_PUBLIC_ORIGIN: ${TEMPLATE_PUBLIC_ORIGIN:?Set the protected HTTPS origin in .env.tunnel}
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?Set the tunnel token in .env.tunnel}
+    depends_on:
+      web:
+        condition: service_started
+      template-service:
+        condition: service_healthy
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp"]
+    # Do not attach to the base development network. Recreating services with
+    # only compose.yaml removes this connection rather than exposing local mode.
+    networks: [protected-tunnel]
+
+networks:
+  protected-tunnel:

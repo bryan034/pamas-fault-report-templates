@@ -7,7 +7,11 @@
   },
   "scripts": {
     "test:entry": "node --experimental-strip-types --test tests/report-entry.test.mjs",
-    "dev:https": "node scripts/local-https.mjs",
+    "dev:tunnel": "docker compose --env-file .env --env-file .env.tunnel -f compose.yaml -f compose.tunnel.yaml up --build -d",
+    "dev:quick": "node scripts/quick-https.mjs start",
+    "dev:quick:stop": "node scripts/quick-https.mjs stop",
+    "test:quick": "node --test tests/quick-https.test.mjs",
+    "test:access": "node --experimental-strip-types --test tests/tunnel-config.test.mjs",
     "test:ids": "node --experimental-strip-types --test tests/create-id.test.mjs",
     "test:deployment": "node --experimental-strip-types --test tests/cloudflare-deployment.test.mjs",
     "build:cloudflare": "node scripts/cloudflare.mjs build",

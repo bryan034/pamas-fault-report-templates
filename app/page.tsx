@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { FileText, Pencil, Plus, Trash2, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useApplicationAccess } from "@/components/application-access";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -39,6 +40,7 @@ function TemplateCard({
   onDelete: () => void;
   onRename: (title: string) => Promise<void>;
 }) {
+  const { canEdit } = useApplicationAccess();
   const [editing, setEditing] = useState(false),
     [title, setTitle] = useState(card.title),
     [error, setError] = useState("");
@@ -89,7 +91,7 @@ function TemplateCard({
           ) : (
             <>
               <h3>{card.title}</h3>
-              <Button
+              {canEdit && <Button
                 size="icon"
                 variant="ghost"
                 aria-label={`Rename ${card.title}`}
@@ -99,10 +101,10 @@ function TemplateCard({
                 }}
               >
                 <Pencil size={16} />
-              </Button>
+              </Button>}
             </>
           )}
-          {!card.archived && (
+          {canEdit && !card.archived && (
             <Button
               size="icon"
               variant="ghost"
@@ -124,12 +126,12 @@ function TemplateCard({
               {card.archived ? "View saved reports" : "Open template"}
             </a>
           </Button>
-          {!card.archived && (
+          {canEdit && !card.archived && (
             <Button asChild size="sm" variant="outline">
               <a href={`/templates/custom/${card.id}/edit`}>Edit template</a>
             </Button>
           )}
-          {card.archived && (
+          {canEdit && card.archived && (
             <>
               <Button
                 size="sm"
@@ -161,6 +163,7 @@ function TemplateCard({
 }
 
 export default function Home() {
+  const { canEdit } = useApplicationAccess();
   const [cards, setCards] = useState<Card[]>([]),
     [showArchived, setShowArchived] = useState(false);
   const [pending, setPending] = useState<Card | null>(null),
@@ -248,12 +251,12 @@ export default function Home() {
           <h1>Report Formatter</h1>
           <p>Choose a template to create or continue a report.</p>
         </div>
-        <Button asChild>
+        {canEdit && <Button asChild>
           <a href="/templates/new">
             <Plus size={17} />
             Create new template
           </a>
-        </Button>
+        </Button>}
       </header>
       <section className="catalog-content">
         <div className="catalog-intro">

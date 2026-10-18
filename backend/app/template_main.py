@@ -39,11 +39,13 @@ from . import preview_assets
 from .deployment import is_cloud, validate_environment
 from .word_conversion import docx_to_pdf, ConverterUnavailable, DOCX_MIME
 from .template_word import generate_docx
+from . import application_access as access
 
 
 @asynccontextmanager
 async def lifespan(_app):
     validate_environment()
+    access.validate_settings()
     init_db()
     with Session(engine()) as db:
         versions.bootstrap(db)
@@ -57,6 +59,7 @@ app = FastAPI(
     redoc_url=None if is_cloud() else "/redoc",
     openapi_url=None if is_cloud() else "/openapi.json",
 )
+app.include_router(access.router)
 app.add_middleware(
     CORSMiddleware,
     # 0.0.0.0 can be opened on the hosting laptop, but other devices must use
@@ -75,8 +78,22 @@ async def cloud_service_auth(request, call_next):
         supplied = request.headers.get("X-Template-Service-Token", "")
         if len(expected) < 32 or not compare_digest(supplied.encode(), expected.encode()):
             return JSONResponse({"detail": "Service authentication required"}, status_code=401, headers={"Cache-Control": "no-store"})
-    response = await call_next(request)
-    if is_cloud():
+    try:
+        if request.url.path != "/api/health" and request.method != "OPTIONS":
+            user = await run_in_threadpool(access.identity, request)
+            request.state.application_user = user
+            if access.protected() and request.method not in {"GET", "HEAD", "OPTIONS"}:
+                if user["role"] == "viewer":
+                    raise HTTPException(403, "Viewers cannot change templates or reports")
+                origin = request.headers.get("Origin")
+                if request.headers.get("Sec-Fetch-Site") == "cross-site" or (not is_cloud() and origin and origin != os.environ["TEMPLATE_PUBLIC_ORIGIN"]):
+                    raise HTTPException(403, "Cross-site writes are not allowed")
+        response = await call_next(request)
+    except HTTPException as error:
+        response = JSONResponse({"detail": error.detail}, status_code=error.status_code)
+    except ValueError:
+        response = JSONResponse({"detail": "Application access is not configured"}, status_code=503)
+    if access.protected():
         response.headers["Cache-Control"] = "private, no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
     return response

@@ -363,7 +363,7 @@ test("template builder errors, properties, clearing, dropdowns, formulas, and re
     .getByRole("button", { name: "Save template", exact: true })
     .click();
   await expect(
-    page.getByRole("heading", { name: "Properties is ready" }),
+    page.getByRole("heading", { name: "Template saved successfully" }),
   ).toBeVisible();
 });
 

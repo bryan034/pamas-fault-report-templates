@@ -798,11 +798,6 @@ export default function TemplateEditor({
               >
                 <Download size={16} /> Download Word
               </Button>
-              <Button variant="outline" onClick={() => void download("original")}
-                disabled={downloading || Boolean(imageBusy)}
-                title="Download this report in its source template's file type">
-                Download original format ({(template.source_format || "pdf").toUpperCase()})
-              </Button>
             </>
           )}{" "}
         </div>

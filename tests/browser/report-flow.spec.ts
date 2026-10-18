@@ -130,11 +130,11 @@ test("unsaved report creation trial accepts values without creating templates or
     .getByRole("button", { name: "Save template", exact: true })
     .click();
   await expect(
-    page.getByRole("heading", { name: "Unsaved flow is ready" }),
+    page.getByRole("heading", { name: "Template saved successfully" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Back to editing", exact: true }),
-  ).toHaveClass(/border/);
+    page.getByRole("button", { name: "Open template", exact: true }),
+  ).toBeVisible();
 });
 
 test("field content follows hover dragging before release; fonts, one-shot ticks, deletion and future defaults", async ({
@@ -210,9 +210,7 @@ test("field content follows hover dragging before release; fonts, one-shot ticks
   expect(saved.styles.company.font).toBe("Helvetica-Bold");
   expect(saved.styles.company.color).toBe("#006600");
   expect(saved.values.company).toBe("Acme live");
-  await page
-    .getByLabel("Format report field", { exact: true })
-    .selectOption("company");
+  await page.getByLabel("Company", { exact: true }).focus();
   await page.getByLabel("Report font size", { exact: true }).fill("14");
   await page.getByRole("button", { name: "Save draft", exact: true }).click();
   const future = page.waitForRequest((req) =>
@@ -235,7 +233,7 @@ test("field content follows hover dragging before release; fonts, one-shot ticks
   expect(current.definition.fields[0].font).toBe("Times-Roman");
   await page.goto(`/templates/custom/${template.id}/new`);
   await expect(page.getByLabel("Company", { exact: true })).toHaveValue("");
-  await page.getByLabel("Format report field").selectOption("company");
+  await page.getByLabel("Company", { exact: true }).focus();
   await expect(
     page.getByLabel("Report font size", { exact: true }),
   ).toHaveValue("14");
@@ -265,9 +263,7 @@ test("nullable saved style overrides inherit template fonts and never publish nu
   ).json();
   expect(draft.form.styles.company.font_size).toBeNull();
   await page.goto(`/templates/custom/${template.id}/drafts/${draft.id}`);
-  await page
-    .getByLabel("Format report field", { exact: true })
-    .selectOption("company");
+  await page.getByLabel("Company", { exact: true }).focus();
   await expect(page.getByLabel("Report font", { exact: true })).toHaveValue(
     "Helvetica-Bold",
   );
@@ -368,7 +364,7 @@ test("sample photo and extracted chips remain visible, show unlinked red state a
   await page.screenshot({ path: "test-results/extraction-flow.png" });
 });
 
-test("draft library exposes Edit draft and direct titled PDF download between rename/delete", async ({
+test("draft library keeps titles readable and offers PDF or Word from one download button", async ({
   page,
   request,
 }) => {
@@ -401,10 +397,66 @@ test("draft library exposes Edit draft and direct titled PDF download between re
   expect((await download.boundingBox())!.x).toBeGreaterThan(
     (await rename.boundingBox())!.x,
   );
-  expect((await download.boundingBox())!.x).toBeLessThan(
-    (await remove.boundingBox())!.x,
+  const card = page
+    .locator(".draft-card")
+    .filter({ hasText: "Downloadable job" });
+  await expect(card.locator(".draft-card-heading button")).toHaveCount(2);
+  await expect(card.locator(".draft-card-footer")).toContainText("Edit draft");
+  await expect(
+    card
+      .locator(".draft-card-footer")
+      .getByRole("button", { name: "Delete Downloadable job" }),
+  ).toBeVisible();
+  await expect(
+    card.getByRole("button", { name: "Download Word Downloadable job" }),
+  ).toHaveCount(0);
+  await expect(
+    card.getByRole("button", {
+      name: "Download original format Downloadable job",
+    }),
+  ).toHaveCount(0);
+  expect((await remove.boundingBox())!.y).toBeGreaterThan(
+    (await rename.boundingBox())!.y,
   );
-  const promise = page.waitForEvent("download");
   await download.click();
-  expect((await promise).suggestedFilename()).toBe("Downloadable job.pdf");
+  await expect(
+    page.getByRole("dialog", { name: "Choose a download format" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  for (const [button, extension] of [
+    ["Download PDF", "pdf"],
+    ["Download Word", "docx"],
+  ]) {
+    await download.click();
+    const promise = page.waitForEvent("download");
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: button, exact: true })
+      .click();
+    expect((await promise).suggestedFilename()).toBe(
+      `Downloadable job.${extension}`,
+    );
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+  }
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    const title = await card
+      .getByRole("heading", { name: "Downloadable job" })
+      .boundingBox();
+    expect(title!.width).toBeGreaterThan(100);
+    expect(title!.height).toBeLessThan(80);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true);
+    await download.click();
+    await expect(
+      page
+        .getByRole("dialog")
+        .getByRole("button", { name: "Download Word", exact: true }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  }
 });

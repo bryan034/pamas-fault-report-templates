@@ -11,6 +11,45 @@ export type CopiedBox = {
   box: TemplateField | ClearArea;
   cover?: ClearArea;
 };
+export type BoxSelection = { kind: "field" | "cover"; id: string };
+
+/** A field owns its cover; never copy or move that cover a second time. */
+export function selectionBoxes(definition: Definition, selections: BoxSelection[]): CopiedBox[] {
+  const fields = new Set(selections.filter(item => item.kind === "field").map(item => item.id));
+  const seen = new Set<string>();
+  return selections.flatMap(selection => {
+    const key = `${selection.kind}:${selection.id}`;
+    if (seen.has(key) || (selection.kind === "cover" && fields.has(selection.id))) return [];
+    seen.add(key);
+    const box = (selection.kind === "field" ? definition.fields : definition.clear_areas)
+      .find(item => item.id === selection.id);
+    return box ? [{kind: selection.kind, box, cover: selection.kind === "field"
+      ? definition.clear_areas.find(item => item.id === selection.id) : undefined}] : [];
+  });
+}
+
+/** Translate an entire selection from its drag-start snapshot, preserving spacing. */
+export function moveBoxes(definition: Definition, boxes: CopiedBox[], dx: number, dy: number): Definition {
+  if (!boxes.length) return definition;
+  dx = Math.max(-Math.min(...boxes.map(item => item.box.x)),
+    Math.min(dx, Math.min(...boxes.map(item => 1 - item.box.x - item.box.width))));
+  dy = Math.max(-Math.min(...boxes.map(item => item.box.y)),
+    Math.min(dy, Math.min(...boxes.map(item => 1 - item.box.y - item.box.height))));
+  const fields = new Map<string, PageBox>(), covers = new Map<string, PageBox>();
+  for (const {kind, box, cover} of boxes) {
+    const moved = {page: box.page, width: box.width, height: box.height,
+      x: box.x + dx, y: box.y + dy};
+    if (kind === "cover") covers.set(box.id, moved);
+    else {
+      fields.set(box.id, moved);
+      if (cover) covers.set(box.id, moved);
+    }
+  }
+  return {...definition,
+    fields: definition.fields.map(item => ({...item, ...fields.get(item.id)})),
+    clear_areas: definition.clear_areas.map(item => ({...item, ...covers.get(item.id)})),
+  };
+}
 export function duplicateBox(
   definition: Definition,
   copied: CopiedBox,
@@ -38,12 +77,11 @@ export function duplicateBox(
         role: null,
       } as TemplateField,
     ],
-    clear_areas: copied.cover
-      ? [
+    clear_areas: [
           ...definition.clear_areas,
-          { ...copied.cover, id, x: shifted.x, y: shifted.y },
-        ]
-      : definition.clear_areas,
+          { id, page: shifted.page, x: shifted.x, y: shifted.y,
+            width: shifted.width, height: shifted.height, color: copied.cover?.color || "#ffffff" },
+        ],
   };
 }
 

@@ -18,7 +18,7 @@ The service image includes LibreOffice Writer, Liberation fonts and python-docx.
 Rebuild after updating source:
 
 ```bash
-npm run dev:https
+docker compose up --build -d
 ```
 
 For standalone Python development, install LibreOffice Writer on that backend's
@@ -33,9 +33,11 @@ PDF for a PDF template, DOCX for a Word template. Changing a template later does
 not change the format/layout of existing reports. Draft cards download saved
 values/photos, while the report editor downloads its current unsaved state.
 
-**Download original template**, in the draft library, returns the untouched
-uploaded file. It is distinct from a filled report. Renaming or editing fields,
-or saving future-report layout defaults, does not overwrite those original bytes.
+The draft library has one Download button offering PDF or Word; it no longer
+shows an original-template download button. The unchanged original upload is
+still retained in the database and available to the authenticated source API.
+Renaming/editing fields or saving future-report layout defaults does not
+overwrite those original bytes.
 
 ## DOCX fidelity and editability
 

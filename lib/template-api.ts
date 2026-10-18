@@ -131,7 +131,7 @@ export function templateApiBase(): string {
   // An explicitly empty value selects same-origin /api routes on Cloudflare.
   const configured = process.env.NEXT_PUBLIC_TEMPLATE_API_BASE_URL;
   if (configured !== undefined) return configured.replace(/\/$/, "");
-  // Local HTTPS gateway routes both UI and API through one trusted origin.
+  // Cloudflare Tunnel and cloud deployments use one HTTPS origin for UI/API.
   if (window.location.protocol === "https:") return window.location.origin;
   return (
     `${window.location.protocol}//${window.location.hostname}:8001`
@@ -153,8 +153,8 @@ export async function templateRequest(
     );
   }
   if (!response.ok) {
-    if (response.status === 401 || response.status === 403)
-      throw new Error("Your session expired or access was denied. Reload the page to sign in again.");
+    if (response.status === 401)
+      throw new Error("Your sign-in session expired or is missing. Reload the page to sign in again.");
     const problem = (await response.json().catch(() => null)) as {
       detail?: string | { msg: string }[];
     } | null;

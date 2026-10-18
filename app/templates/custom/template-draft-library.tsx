@@ -21,6 +21,15 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { useApplicationAccess } from "@/components/application-access";
+import {
   CustomDraftSummary,
   TemplateDetail,
   downloadBlob,
@@ -34,6 +43,7 @@ export default function TemplateDraftLibrary({
 }: {
   templateId: string;
 }) {
+  const { canEdit } = useApplicationAccess();
   const [template, setTemplate] = useState<TemplateDetail | null>(null),
     [drafts, setDrafts] = useState<CustomDraftSummary[]>([]);
   const [search, setSearch] = useState(""),
@@ -44,6 +54,9 @@ export default function TemplateDraftLibrary({
     [title, setTitle] = useState("");
   const [deleting, setDeleting] = useState<CustomDraftSummary | null>(null),
     [busy, setBusy] = useState(false);
+  const [downloadTarget, setDownloadTarget] =
+      useState<CustomDraftSummary | null>(null),
+    [downloading, setDownloading] = useState(false);
   const [error, setError] = useState(""),
     [notice, setNotice] = useState("");
   const base = `/api/templates/${templateId}`;
@@ -147,18 +160,27 @@ export default function TemplateDraftLibrary({
       setNotice(cause instanceof Error ? cause.message : "Download failed");
     }
   };
-  const downloadDraft = async (draft: CustomDraftSummary, format: "pdf" | "docx" | "original" = "pdf") => {
+  const downloadDraft = async (
+    draft: CustomDraftSummary,
+    format: "pdf" | "docx",
+  ) => {
+    setDownloading(true);
     try {
-      const response = await templateRequest(`${base}/drafts/${draft.id}/download?format=${format}`);
+      const response = await templateRequest(
+        `${base}/drafts/${draft.id}/download?format=${format}`,
+      );
       const filename =
         response.headers
           .get("Content-Disposition")
-          ?.match(/filename="([^"]+)"/)?.[1] || `${draft.title}.pdf`;
+          ?.match(/filename="([^"]+)"/)?.[1] || `${draft.title}.${format}`;
       downloadBlob(await response.blob(), filename);
+      setDownloadTarget(null);
     } catch (cause) {
       setNotice(
         cause instanceof Error ? cause.message : "Could not download draft",
       );
+    } finally {
+      setDownloading(false);
     }
   };
   const hasCompany =
@@ -193,13 +215,7 @@ export default function TemplateDraftLibrary({
           >
             Download blank PDF
           </Button>
-          <Button variant="outline" size="sm" onClick={async () => {
-            try {
-              const response = await templateRequest(`${base}/original`);
-              downloadBlob(await response.blob(), response.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1] || `template.${template?.source_format || "pdf"}`);
-            } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Download failed"); }
-          }}>Download original template</Button>
-          {!template?.archived && (
+          {canEdit && !template?.archived && (
             <>
               <Button asChild size="sm">
                 <a href={`/templates/custom/${templateId}/edit`}>
@@ -279,9 +295,13 @@ export default function TemplateDraftLibrary({
             <FilePlus2 />
             <h3>{drafts.length ? "No matching drafts" : "No drafts yet"}</h3>
             <p>Create a report and give it a title before saving.</p>
-            <Button asChild>
-              <a href={`/templates/custom/${templateId}/new`}>Create report</a>
-            </Button>
+            {canEdit && !template.archived && (
+              <Button asChild>
+                <a href={`/templates/custom/${templateId}/new`}>
+                  Create report
+                </a>
+              </Button>
+            )}
           </div>
         ) : (
           <div className="draft-grid">
@@ -317,40 +337,29 @@ export default function TemplateDraftLibrary({
                     ) : (
                       <>
                         <h3>{draft.title}</h3>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          aria-label={`Rename ${draft.title}`}
-                          onClick={() => {
-                            setRenaming(draft.id);
-                            setTitle(draft.title);
-                          }}
-                        >
-                          <Pencil size={16} />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          aria-label={`Download ${draft.title}`}
-                          onClick={() => void downloadDraft(draft)}
-                        >
-                          <Download size={16} />
-                        </Button>
-                        <Button variant="ghost" size="sm"
-                          aria-label={`Download Word ${draft.title}`}
-                          onClick={() => void downloadDraft(draft, "docx")}>Word</Button>
-                        <Button variant="ghost" size="sm"
-                          aria-label={`Download original format ${draft.title}`}
-                          onClick={() => void downloadDraft(draft, "original")}>Original</Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="delete-draft"
-                          aria-label={`Delete ${draft.title}`}
-                          onClick={() => setDeleting(draft)}
-                        >
-                          <Trash2 size={16} />
-                        </Button>
+                        <div className="draft-card-actions">
+                          {canEdit && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              aria-label={`Rename ${draft.title}`}
+                              onClick={() => {
+                                setRenaming(draft.id);
+                                setTitle(draft.title);
+                              }}
+                            >
+                              <Pencil size={16} />
+                            </Button>
+                          )}
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            aria-label={`Download ${draft.title}`}
+                            onClick={() => setDownloadTarget(draft)}
+                          >
+                            <Download size={16} />
+                          </Button>
+                        </div>
                       </>
                     )}
                   </div>
@@ -358,13 +367,26 @@ export default function TemplateDraftLibrary({
                   <time dateTime={draft.created_at}>
                     Created {new Date(draft.created_at).toLocaleString()}
                   </time>
-                  <Button asChild size="sm" variant="outline">
-                    <a
-                      href={`/templates/custom/${templateId}/drafts/${draft.id}`}
-                    >
-                      Edit draft
-                    </a>
-                  </Button>
+                  <div className="draft-card-footer">
+                    <Button asChild size="sm" variant="outline">
+                      <a
+                        href={`/templates/custom/${templateId}/drafts/${draft.id}`}
+                      >
+                        {canEdit ? "Edit draft" : "View draft"}
+                      </a>
+                    </Button>
+                    {canEdit && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="delete-draft"
+                        aria-label={`Delete ${draft.title}`}
+                        onClick={() => setDeleting(draft)}
+                      >
+                        <Trash2 size={16} />
+                      </Button>
+                    )}
+                  </div>
                 </div>
               </article>
             ))}
@@ -376,6 +398,46 @@ export default function TemplateDraftLibrary({
           {notice}
         </div>
       )}
+      <Dialog
+        open={!!downloadTarget}
+        onOpenChange={(open) => {
+          if (!open && !downloading) setDownloadTarget(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Choose a download format</DialogTitle>
+            <DialogDescription>
+              Download “{downloadTarget?.title}” as a PDF or Word document.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={downloading}
+              onClick={() => setDownloadTarget(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={downloading}
+              onClick={() => {
+                if (downloadTarget) void downloadDraft(downloadTarget, "pdf");
+              }}
+            >
+              Download PDF
+            </Button>
+            <Button
+              disabled={downloading}
+              onClick={() => {
+                if (downloadTarget) void downloadDraft(downloadTarget, "docx");
+              }}
+            >
+              Download Word
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <AlertDialog
         open={!!deleting}
         onOpenChange={(open) => {

@@ -12,7 +12,7 @@
       "workers_dev": false,
       "preview_urls": false,
       "routes": [],
-      "vars": { "TEMPLATE_ENVIRONMENT": "staging", "TEMPLATE_DATABASE_SCHEMA": "report_formatter" },
+      "vars": { "TEMPLATE_ENVIRONMENT": "staging", "TEMPLATE_DATABASE_SCHEMA": "report_formatter", "TEMPLATE_OWNER_EMAIL": "bry.io456@gmail.com" },
       "containers": [{ "class_name": "TemplateContainer", "image": "../../../backend/Dockerfile", "instance_type": "basic", "max_instances": 1 }],
       "durable_objects": { "bindings": [{ "name": "TEMPLATE_CONTAINER", "class_name": "TemplateContainer" }] },
       "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TemplateContainer"] }]
@@ -22,7 +22,7 @@
       "workers_dev": false,
       "preview_urls": false,
       "routes": [],
-      "vars": { "TEMPLATE_ENVIRONMENT": "production", "TEMPLATE_DATABASE_SCHEMA": "report_formatter" },
+      "vars": { "TEMPLATE_ENVIRONMENT": "production", "TEMPLATE_DATABASE_SCHEMA": "report_formatter", "TEMPLATE_OWNER_EMAIL": "bry.io456@gmail.com" },
       "containers": [{ "class_name": "TemplateContainer", "image": "../../../backend/Dockerfile", "instance_type": "basic", "max_instances": 1 }],
       "durable_objects": { "bindings": [{ "name": "TEMPLATE_CONTAINER", "class_name": "TemplateContainer" }] },
       "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TemplateContainer"] }]

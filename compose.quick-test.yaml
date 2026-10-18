@@ -1,0 +1,33 @@
+# Optional sidecars only: reuse the current services/network/database unchanged.
+# Use npm run dev:quick -- your-real-email@example.com, not the named-tunnel overlay.
+services:
+  quick-gateway:
+    image: nginxinc/nginx-unprivileged:stable-alpine
+    profiles: [quick-test]
+    ports:
+      - "127.0.0.1:8088:8080"
+    volumes:
+      - ./deploy/quick-test/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: "no"
+
+  quick-tunnel:
+    # This exact image was checked for --allowed-mail support. Never remove
+    # that flag as a workaround: the app's existing testing data is behind it.
+    image: cloudflare/cloudflared@sha256:a15a3b50b8dabd57ac2090e9484c0247dba9dfa1f0df4d298d4317f9d69eb2d5
+    profiles: [quick-test]
+    command:
+      - tunnel
+      - --no-autoupdate
+      - --url
+      - http://quick-gateway:8080
+      - --allowed-mail
+      - ${QUICK_TEST_ALLOWED_EMAILS:?Set real approved email addresses before starting a public tunnel}
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: "no"

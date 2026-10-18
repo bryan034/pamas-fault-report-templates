@@ -13,7 +13,22 @@ backup/migration notes and acceptance checks. **Nothing has been deployed merely
 by adding this configuration.** The frontend refuses unauthenticated requests;
 fill in your own domain and Access identifiers before deploying it.
 
+For Google sign-in and administrator-approved emails, follow
+[Google sign-in setup](docs/google-sign-in.md). The configured administrator is
+`bry.io456@gmail.com`; approved Editors/Viewers are managed in the app at
+`/access`. Cloudflare verifies Google identity; the app independently enforces
+its database allow-list. This production flow is separate from public Quick
+Tunnel testing, which can intentionally run without login.
+
 ## Run with Docker (recommended)
+
+For temporary multi-device HTTPS testing without buying a domain, see
+[Quick HTTPS testing](docs/quick-https-testing.md). It reuses the existing testing
+database. Email mode requires real approved addresses for login codes; explicit
+`QUICK_TEST_ACCESS=public` in `.env.quick` removes all login and lets anyone with
+the URL view/edit/delete testing data. Public mode starts with `npm run dev:quick`;
+email mode starts with `npm run dev:quick -- YOUR_REAL_EMAIL`. Stop either with
+`npm run dev:quick:stop`. These modes are distinct from application role-based Access.
 
 Install and start Docker Desktop, then from this folder:
 
@@ -24,22 +39,16 @@ cp .env.example .env
 Edit `.env` and replace `FAULT_REPORT_DB_PASSWORD` with a long URL-safe password (letters, numbers, hyphens, and underscores). Then run:
 
 ```bash
-npm run dev:https
+docker compose up --build -d
 docker compose ps
 ```
 
-The setup command builds/starts Compose, configures the detected Wi-Fi IP, and exports the public local CA certificate to `.local-https/root.crt`. **Trust that certificate on each device before opening the app**: follow [local HTTPS setup](docs/local-https.md). No system trust store is changed automatically. Then open `https://localhost:5173` on the laptop or the printed `https://LAPTOP_IP:5173` address on another device. Allow incoming connections to Docker if macOS asks. Node.js is needed for this setup helper; the app itself runs in Docker.
-
-`0.0.0.0:5173` is the server's **listen address**, not the address to share.
-For example, if the laptop's Wi-Fi IP is `192.168.0.218`, other devices open
-`https://192.168.0.218:5173`. Their own `localhost`/`0.0.0.0` does not identify your
-laptop. HTTPS requests for both pages and `/api/...` use this single origin;
-only port `5173` needs to be reachable over Wi-Fi. If the IP changes, rerun
-`npm run dev:https` (or `npm run dev:https -- YOUR_WIFI_IP`). If the page cannot
-reach the service, check `https://LAPTOP_IP:5173/api/health` (should show
-`{"status":"ok"}`), certificate trust, Docker service health, the laptop firewall
-and Wi-Fi guest/client-isolation settings. Devices
-on a guest network may be unable to contact each other even on the same Wi-Fi.
+Open `http://localhost:5173` on the laptop. The default stack is loopback-only,
+with no login; it deliberately cannot be opened through the laptop's Wi-Fi IP.
+For other devices, use [Cloudflare Tunnel + Access](docs/cloudflare-tunnel.md):
+one public HTTPS hostname, email sign-in and application-wide Owner/Editor/Viewer
+roles. No local certificate installation is needed. The app and data still run
+on the laptop. This is different from deploying Workers/Containers to the cloud.
 
 Editor IDs work on both HTTPS/localhost and plain-HTTP LAN addresses: the shared
 `lib/create-id.ts` helper uses native `crypto.randomUUID()` when available and
@@ -48,13 +57,12 @@ fields, cover/image boxes, copied fields, shapes and extraction items. It does
 not make HTTP encrypted or enable unrelated HTTPS-only browser APIs. Production
 must still use HTTPS. Run `npm run test:ids` for both code-path checks.
 
-The Compose stack has four containers:
+The default Compose stack has three containers (the optional tunnel adds one):
 
 | Container | Role | Access |
 | --- | --- | --- |
-| `https` | Caddy HTTPS gateway for pages and APIs | `https://localhost:5173` or laptop IP on the LAN |
-| `web` | Shared template catalog, draft cards, and editor | Behind the gateway; HTTP debugging at `127.0.0.1:5175` |
-| `template-service` | Shared PDF analysis, uploaded-template definitions, generic reports, and drafts | Behind the gateway; HTTP debugging at `127.0.0.1:8001` |
+| `web` | Shared template catalog, draft cards, and editor | `http://localhost:5173` |
+| `template-service` | Shared PDF analysis, uploaded-template definitions, generic reports, and drafts | `http://127.0.0.1:8001` |
 | `template-db` | PostgreSQL database for all uploaded templates and their drafts/images | Laptop only at `127.0.0.1:5434` |
 
 Uploaded templates share `template-service` and `template-db`; uploading another PDF does not build or deploy a container. The database continues using the existing `FAULT_REPORT_DB_PASSWORD` variable in `.env` for compatibility; do not change it just because the legacy service was retired. PostgreSQL data lives in the named `template-postgres` volume and survives ordinary container restarts and `docker compose down`. **Do not run `docker compose down -v` unless you intend to delete the active database volume.**
@@ -96,8 +104,8 @@ Opening a template selects its first editable field in visual page order. Red ca
 3. New-template field types are **text, number, date, image, and calculated**. Manual draft-filter role, alignment, and coordinate controls are removed. Fields are centered initially; drag boxes/handles to position or resize them. **Default value for new reports** explicitly sets reusable text, number or date values. Detected sample values and trial-report values are never promoted to defaults. New reports and Reset use configured defaults; explicit blank report values override them, and existing drafts retain their saved revision/defaults. Images and calculations do not accept manual defaults. Older saved reports retain their original field types/revision. Calculations use two number-field dropdowns and a **+**, **−**, or percentage operator. Percentages use numerator/denominator; multiplication by 100 stays internal. Calculated fields appear in the PDF/preview, not the report sidebar. Named errors highlight affected source controls in red; preview/download reject zero denominators and numeric overflow. Drafts can save unfinished calculations. Text shrinks/wraps to fit, or produces a fit error instead of clipping. Image boxes fit the whole image by default; **Fill box** crops edges. Existing/automatically detected company/date roles continue supporting filtering.
 4. **Cover box** masks old values or photographs. Avoid labels and borders. Input/image fields can be placed on top of covers. Select fields directly on the PDF: there is no sticky list of imported fields. The selected field/cover settings appear immediately below **Preview report creation flow**. Covers stay in their original positions when a field moves; edit them directly on the PDF using **Only view cover boxes** (there is no cover dropdown/list). **View clean template** is beside that button; the blue **Continue editing template** button returns to editing. Cleaning renders source pages at up to 216 DPI and removes underlying sample text from the blank PDF; the original PDF is retained separately. New report text remains searchable.
 5. The separate **Extract Data from Image** sidebar section contains image selection, sample photos, cropping and extracted items. Select an image box and optionally choose a **Sample photo for extraction**; its filename and thumbnail appear in the sidebar. Click **Extract data from image**. Without a reference upload, the photo inside that PDF box is used. The screen dims; drag over just the value, name the area, and create an extracted item. Escape/X cancels and **Retake area** starts again; both buttons remain visible. **Extracted Data from Image** appears below the extraction controls: unlinked items have red outlines, linked items name their target field. Drag an item onto a value field, or use its **Extracted item** control. Sample readings are never defaults. Saved crop coordinates and links read fresh values from each report's image upload. Keep future photos consistently framed and check OCR output. Older quoted-label rules remain supported.
-6. **Preview report creation flow** opens a temporary editor for the current unsaved template. Enter values, upload photos, move fields, format text or draw shapes to test it. **Continue editing** returns to the builder; **Save template** saves only the builder definition, never the trial report values/photos/formatting. Trial reports are not written to the database. No review checkbox is required. After saving, **Back to editing** is an outline button; **Edit template** in the draft library is blue. Each template/configuration save creates an immutable revision: existing drafts retain their layout/schema/background; new reports use the latest revision. The configuration download button and dedicated export endpoint are removed; the blank PDF remains downloadable.
-7. Create a report and drop photos into image boxes in the sidebar or preview. The sidebar follows page/top-to-bottom/left-to-right positions, not names or creation order. Desktop sidebar and preview scroll independently. Drag the divider between them to resize the sidebar, or focus it and use arrow keys (Home/End for minimum/maximum). Inputs reflow into additional columns when space permits; mobile stays stacked. Click fields to type directly in the preview, including the temporary template trial. Their matching sidebar controls glow and scroll into view. Drag fields or hover over shapes to move/resize them; clicking outside deselects them. The report toolbar changes the selected field's font, size and colour. Rectangles and ticks are one-shot, and shapes have hover delete controls. The future-configuration dialog wraps text/actions and stays within the viewport on narrow screens. Save updates the current titled draft; missing fields appear centrally without blocking saves. Size/geometry changes offer a separate opt-in to future-report defaults, excluding values/photos/other styles. Reset and draft deletion require confirmation. Draft cards have **Edit draft** plus a PDF download button between rename and delete; it downloads the saved draft with its saved images, not an unsaved editor state.
+6. **Preview report creation flow** opens a temporary editor for the current unsaved template. Enter values, upload photos, move fields, format text or draw shapes to test it. **Continue editing** returns to the builder; **Save template** saves only the builder definition, never the trial report values/photos/formatting. Trial reports are not written to the database. No review checkbox is required. Saving shows **Template saved successfully**, then opens the template's report library. **Edit template** there returns to editing. Each template/configuration save creates an immutable revision: existing drafts retain their layout/schema/background; new reports use the latest revision. The configuration download button and dedicated export endpoint are removed; the blank PDF remains downloadable.
+7. Create a report and drop photos into image boxes in the sidebar or preview. The sidebar follows page/top-to-bottom/left-to-right positions, not names or creation order. Desktop sidebar and preview scroll independently. Drag the divider between them to resize the sidebar, or focus it and use arrow keys (Home/End for minimum/maximum). Inputs reflow into additional columns when space permits; mobile stays stacked. Click fields to type directly in the preview, including the temporary template trial. Their matching sidebar controls glow and scroll into view. Drag fields or hover over shapes to move/resize them; clicking outside deselects them. The sticky report toolbar changes the selected field's font, size and colour; select the field directly in the preview or sidebar, not from a toolbar dropdown. Rectangles and ticks are one-shot, and shapes have hover delete controls. The future-configuration dialog wraps text/actions and stays within the viewport on narrow screens. Save updates the current titled draft; missing fields appear centrally without blocking saves. Size/geometry changes offer a separate opt-in to future-report defaults, excluding values/photos/other styles. Reset and draft deletion require confirmation. Draft cards keep Rename and Download beside a readable title; Download opens a PDF/Word chooser. Edit draft and Delete are below. Downloads use saved values/images, not an unsaved editor state.
 8. The preview remains live with a 120ms typing debounce. PDF.js renders transparent field pages off-screen and replaces only their value canvases; the cleaned background stays in place. Moving/resizing a field moves/scales its value immediately, with final text fitting refreshed after release. Shapes use matching vector paths in the preview and export. Previous valid layers remain during rendering/errors. A bounded 64MB, 32-entry, five-minute server cache avoids repeat photo uploads during typing and refreshes expired tokens; it is not persistent storage. Saving/downloading send actual report images. OCR reuses one worker per image batch and avoids re-reading identical crops.
 9. Cards have separate **Open template** and **Edit template** buttons. The delete icon **archives** a template, retaining reports/photos. **Show archived templates** offers **Recover** or **Delete permanently**. Permanent deletion requires a backup warning/confirmation and removes all reports, images, PDF revisions and configuration for the selected template. Other templates remain untouched.
 
@@ -125,7 +133,9 @@ docker compose exec template-db psql -U templates -d templates
 
 Tables include `templates`, `template_drafts`, `template_draft_images`, `template_revisions`, `template_draft_revisions`, and `template_archives`. Original/clean PDFs, definitions and thumbnails are retained for each revision; draft bindings identify which revision to use. Draft values, crop items, shapes and photos remain in PostgreSQL. A desktop client connects to `127.0.0.1:5434`, database/user `templates`, using the password from `.env`.
 
-Reports offer **Download PDF**, **Download Word**, and **Download original format**. The last exports the report using its source revision's file type, not the untouched original upload. The draft library offers saved-report downloads and **Download original template** to retrieve that unchanged upload. DOCX report values are editable, positioned Word text boxes; template artwork, photos and annotations are page images, not reconstructed Word tables/shapes. PDF remains the reference layout; Word rendering can vary with fonts/software.
+Report editors offer **Download PDF** and **Download Word**; the redundant original-format button is removed. The draft library uses one Download button with PDF/Word choices and has no original-template download button. Original uploads remain stored for template editing and revision history. DOCX report values are editable, positioned Word text boxes; template artwork, photos and annotations are page images, not reconstructed Word tables/shapes. PDF remains the reference layout; Word rendering can vary with fonts/software.
+
+Explicit template defaults appear immediately in both the template editor and its clean preview, using the field's font, colour and alignment and shrinking to stay within its boundaries. Empty fields show their labels while editing. This overlay does not burn defaults into the blank PDF or turn detected sample values into defaults.
 
 The additional `template_sources` table stores original upload bytes, filename and file type per immutable revision. Startup creates this new table without replacing existing tables or drafts. Revisions keep original uploads across template/configuration edits. Permanent deletion removes these source records too; archive retains them. Include this table in database backups.
 
@@ -144,7 +154,7 @@ npm install
 npm run dev
 ```
 
-Replace `YOUR_PASSWORD` with the same URL-safe password in `.env`. This standalone hot-reload setup uses HTTP on port `5173` and calls the browser's hostname on API port `8001`. Stop the Compose HTTPS gateway first if it occupies port `5173`. For secure Wi-Fi testing, use the full-stack `npm run dev:https` workflow instead. `NEXT_PUBLIC_TEMPLATE_API_BASE_URL` can override API routing; without an override, HTTPS uses same-origin `/api/...`, while standalone HTTP uses port `8001`. Do not configure an HTTP API URL under an HTTPS frontend (mixed content).
+Replace `YOUR_PASSWORD` with the same URL-safe password in `.env`. This standalone hot-reload setup uses HTTP on port `5173` and calls the browser's hostname on API port `8001`. Stop the Compose web/API services first if they occupy those ports. For secure multi-device testing, use the [protected tunnel workflow](docs/cloudflare-tunnel.md). `NEXT_PUBLIC_TEMPLATE_API_BASE_URL` can override API routing; without an override, HTTPS uses same-origin `/api/...`, while standalone HTTP uses port `8001`. Do not configure an HTTP API URL under an HTTPS frontend (mixed content).
 
 ## Tests and code map
 
@@ -154,6 +164,7 @@ npm run test:ocr
 npm run test:entry
 npm run test:ids
 npm run test:deployment
+npm run test:access
 node --experimental-strip-types --test tests/template-editing.test.mjs
 npm run test:templates
 npm run build
@@ -168,7 +179,7 @@ Template fields and report geometry overrides use normalized top-left page coord
 
 ## Network and privacy
 
-OCR runs in the browser. Drafts and uploaded images go to the shared Python service and its local PostgreSQL container; no cloud OCR or database is used. The local HTTPS gateway encrypts traffic and enables secure-context browser features once its CA certificate is trusted, but intentionally adds **no login**: anyone who can reach the laptop's HTTPS port on Wi-Fi can view or change all drafts and create templates. HTTP debug/API ports are loopback-only. Use only on a trusted network; do not forward ports `5173`, `5175` or `8001` to the internet. Protect the gateway's CA private-key volume and share only the exported public certificate.
+OCR runs in the browser. Drafts and uploaded images go to the shared Python service and its local PostgreSQL container; the local workflow uses no cloud OCR or database. Local development is unauthenticated and loopback-only. Do not port-forward `5173`, `8001` or `5434`. The optional tunnel uses Cloudflare's public HTTPS certificate and Access identity verification, with Python enforcing application roles on every data request. Unknown users are denied, Viewers cannot write, and only the configured Owner can manage grants at `/access`. Access applies to the whole application, not individual documents. Cloudflare processes proxied traffic; this is not end-to-end encryption excluding Cloudflare.
 
 That paragraph describes **local development**, not the optional cloud deployment.
 Cloud builds enforce Access and route APIs privately; PostgreSQL is then hosted

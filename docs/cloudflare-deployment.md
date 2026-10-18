@@ -8,7 +8,7 @@ by editing this repository. Start with staging and test it before production.
 
 ```text
 Team browser
-  -> HTTPS custom domain + Cloudflare Access email login
+  -> HTTPS custom domain + Cloudflare Access Google sign-in
   -> Vinext frontend Worker (also verifies the signed Access JWT)
        -> frontend/static assets
        -> /api/* -> private service binding -> backend gateway Worker
@@ -18,17 +18,20 @@ Team browser
 The backend gateway has no public routes, workers.dev URL, or preview URL.
 The frontend also disables workers.dev/preview URLs; only your configured custom
 domain is intended to be reachable. Every request, including static assets,
-passes the frontend's authentication check (`assets.run_worker_first`).
+passes the frontend's authentication and app-membership checks (`assets.run_worker_first`).
 The gateway passes a separate secret token to Python; Python rejects requests
 without it in staging/production. CORS is not used as authentication.
 
-Both environments are shared-team workspaces: all admitted members can view,
-change, archive and permanently delete all reports/templates. This does not add
-per-user document ownership, roles, audit trails, or MFA. Email login relies on
-mailbox security. Configure stronger identity if your documents require it.
+Both environments are shared-team workspaces with application-wide roles:
+Owner manages grants, Editor can change all templates/reports, and Viewer can
+browse/download saved reports. `TEMPLATE_OWNER_EMAIL` is set to `bry.io456@gmail.com`
+in the backend Worker configs; the owner manages roles at `/access`. Access
+admission alone is not an app grant. There is no per-document sharing or complete
+activity audit trail. Follow [Google sign-in setup](google-sign-in.md), including
+the Google-only Access policy and live-account security tests.
 
 The local `compose.yaml`, local PostgreSQL volume and `npm start` remain a separate
-development workflow. Local HTTPS setup is described below. Do not change local
+development workflow. Optional protected Tunnel setup is described below. Do not change local
 `.env` to the production DB URL.
 The original `vite.config.ts` and its local preview helpers are not used by the
 cloud build. The cloud config does not load mock authentication.
@@ -108,13 +111,17 @@ large assets to private object storage is a separate future migration.
 
 1. Enable Zero Trust/Access in Cloudflare and select a team name, for example
    `your-team.cloudflareaccess.com`.
-2. Enable **One-time PIN** as a login method. Members can use their existing
-   email accounts.
+2. Configure the consumer **Google** identity provider using the Client ID/Secret
+   from Google Auth Platform, following [Google sign-in setup](google-sign-in.md).
+   This works with ordinary Google accounts, without Workspace.
 3. Add a **Self-hosted application** covering the ENTIRE staging hostname
    `reports-staging.example.com` (all paths, not just `/` or `/templates`).
-4. Add an **Allow** policy listing only your members' exact email addresses.
-   Do not use Everyone, an unrestricted email-domain rule, Bypass, or a public
-   exception for `/api`, downloads, OCR assets or PDF workers.
+4. Select Google only for application login and add an **Allow** policy with
+   **Include → Login Methods → your Google provider**. This verifies identity;
+   the app's database grants decide membership. An unapproved Google account
+   receives 403 from the app. Do not use Everyone, Bypass or public exceptions
+   for `/api`, downloads, OCR assets or PDF workers. A separate exact-email
+   Cloudflare policy is optional, but then every member needs approval there too.
 5. Copy the application's **AUD/Application Audience** value. Repeat with a
    separate Access application/AUD for the production hostname.
 6. Configure session lifetime to suit your team. Revoking an email prevents
@@ -170,11 +177,19 @@ npx wrangler secret put TEMPLATE_SERVICE_TOKEN --config deploy/cloudflare/backen
 For `TEMPLATE_DATABASE_URL`, paste the staging Supabase URL from step 1.
 For `TEMPLATE_SERVICE_TOKEN`, use a separate password-manager-generated random
 secret of at least 32 characters (prefer 64). It is NOT the database password
-or a Supabase API key. The gateway explicitly passes both secrets into the
+or a Supabase API key. The gateway explicitly passes these settings into the
 container at startup, and injects the service token into API requests.
 
+`TEMPLATE_OWNER_EMAIL` is already configured as `bry.io456@gmail.com` in both
+backend environment configs, as a regular non-secret variable. If an older
+deployment used a secret of that same name, deliberately remove the old secret
+before deploying it as a variable. The owner grants Editor/Viewer roles from
+`/access`, without editing the Google-only policy for each member. The frontend Worker
+replaces any caller-supplied identity header with the email from its verified JWT;
+Python trusts that header only behind the authenticated private service gateway.
+
 The private backend can be deployed before its secrets are set; it cannot
-successfully serve requests until both are valid. The frontend never receives
+successfully serve requests until all are valid. The frontend never receives
 these secrets. `TEMPLATE_DATABASE_SCHEMA` and `TEMPLATE_ENVIRONMENT` are already
 set per environment in the backend config.
 
@@ -255,17 +270,17 @@ environment separation. Separate repositories are not required.
 ## Local development stays local
 
 ```bash
-npm run dev:https
+docker compose up --build -d
 ```
 
-The local database is still `template-db`, exposed only on localhost:5434. The
-local Caddy gateway serves pages and APIs together at `https://LAPTOP_IP:5173`;
-HTTP debug ports `5175` (web) and `8001` (API) are loopback-only. Trust the exported
-local CA on each device using [local HTTPS setup](local-https.md). No Cloudflare
-account, Supabase URL or Access token is needed. Existing local tests keep their
-SQLite/disposable PostgreSQL isolation.
-To test Cloudflare-specific behaviour use staging, not the LAN's unauthenticated
-development endpoints. Do not port-forward the local stack to the internet.
+The local database is still `template-db`, exposed only on localhost:5434. Open
+`http://localhost:5173`; web, API and DB ports are all loopback-only. No cloud
+account, Supabase URL or Access token is needed for laptop-only development.
+For other devices use [Cloudflare Tunnel + Access](cloudflare-tunnel.md), which
+keeps the same local data and verifies identities before authorizing API calls.
+Existing tests keep their SQLite/disposable PostgreSQL isolation. A tunnel does
+not test cloud container restarts, real Supabase permissions or Worker deployment;
+use staging for those checks. Do not port-forward local ports to the internet.
 
 ## Operations, backups and limitations
 

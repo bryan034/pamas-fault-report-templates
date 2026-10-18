@@ -1,0 +1,9 @@
+# Explicit opt-in only. Anyone with this URL can edit/delete testing data.
+# Used after compose.quick-test.yaml by the launcher in public mode.
+services:
+  quick-tunnel:
+    command:
+      - tunnel
+      - --no-autoupdate
+      - --url
+      - http://quick-gateway:8080
