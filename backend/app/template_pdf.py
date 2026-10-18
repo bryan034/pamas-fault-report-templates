@@ -398,21 +398,10 @@ def _paint_field(pdf, field, box, page, report, values, images):
         with Image.open(BytesIO(images[field.id])) as source:
             image = ImageOps.exif_transpose(source).convert("RGB")
             target = (max(1, round(width * 3)), max(1, round(height * 3)))
-            if field.image_fit == "cover":
-                image = ImageOps.fit(image, target)
-                pdf.drawImage(
-                    ImageReader(image), x, y, width=width, height=height
-                )
-            else:
-                image = ImageOps.contain(image, target)
-                draw_width, draw_height = image.width / 3, image.height / 3
-                pdf.drawImage(
-                    ImageReader(image),
-                    x + (width - draw_width) / 2,
-                    y + (height - draw_height) / 2,
-                    width=draw_width,
-                    height=draw_height,
-                )
+            # Always fill the box, including legacy templates saved as "contain".
+            # Crop only this rendered copy; keep the original upload for OCR.
+            image = ImageOps.fit(image, target, centering=(0.5, 0.5))
+            pdf.drawImage(ImageReader(image), x, y, width=width, height=height)
         for rect in report.rectangles:
             if rect.image_field != field.id:
                 continue

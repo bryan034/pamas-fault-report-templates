@@ -309,7 +309,7 @@ export default function Home() {
               {pending?.archived ? (
                 <>
                   Permanently delete “{pending.title}” and ALL of its past
-                  reports, uploaded images, and template versions? This action
+                  reports (including Recently Deleted), uploaded images, and template versions? This action
                   cannot be undone in the application. Make a database backup
                   first if you want to keep previous records. Other templates
                   are not affected.

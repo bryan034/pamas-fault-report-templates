@@ -212,7 +212,8 @@ def test_generation_uses_page_sizes_dates_images_and_annotations():
     assert b"4 w" in reader.pages[0].get_contents().get_data()
     assert reader.metadata.title == "Inspection A"
     assert any(
-        abs(item.image.width / item.image.height - 4 / 3) < 0.01
+        # The photo is cropped to its 144 x 120 point box, not letterboxed.
+        abs(item.image.width / item.image.height - 144 / 120) < 0.01
         for item in reader.pages[0].images
     )
 

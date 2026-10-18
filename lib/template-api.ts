@@ -103,6 +103,8 @@ export type CustomDraftSummary = {
   report_date: string;
   created_at: string;
   updated_at: string;
+  deleted_at?: string;
+  expires_at?: string;
 };
 export type CustomDraftDetail = CustomDraftSummary & {
   revision_id: string;

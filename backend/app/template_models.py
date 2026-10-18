@@ -59,7 +59,7 @@ class TemplateField(PageBox):
     color: str = Field(default="#000000", pattern=r"^#[0-9A-Fa-f]{6}$")
     alignment: Literal["left", "center", "right"] = "center"
     options: list[str] = Field(default_factory=list, max_length=100)
-    image_fit: Literal["contain", "cover"] = "contain"
+    image_fit: Literal["contain", "cover"] = "cover"
     calculation: Calculation | None = None
     suggested_value: str = Field(default="", max_length=2000)
     # Explicit user defaults are separate from values detected in the source PDF.

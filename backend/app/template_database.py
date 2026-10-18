@@ -70,6 +70,18 @@ class DraftImage(Base):
     media_type: Mapped[str] = mapped_column(String(40))
 
 
+class DraftDeletion(Base):
+    """Additive trash marker: keep the draft, images and revision for 30 days."""
+
+    __tablename__ = "template_draft_deletions"
+    draft_id: Mapped[str] = mapped_column(
+        ForeignKey("template_drafts.id"), primary_key=True
+    )
+    deleted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now, index=True
+    )
+
+
 class TemplateRevision(Base):
     """Immutable PDF/schema snapshots. Added tables preserve existing installations."""
 

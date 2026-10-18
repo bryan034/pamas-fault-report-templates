@@ -748,7 +748,7 @@ export default function TemplateBuilder({
                 alignment: "center",
                 options: [],
                 calculation: null,
-                image_fit: "contain",
+                image_fit: "cover",
                 suggested_value: "",
               },
             ],
@@ -1290,24 +1290,10 @@ export default function TemplateBuilder({
                       </label>
                     )}
                     {field.kind === "image" ? (
-                      <>
-                        <label className="field-stack">
-                          <span>Image fitting</span>
-                          <select
-                            value={field.image_fit || "contain"}
-                            onChange={(event) =>
-                              updateField({
-                                image_fit: event.target.value as
-                                  | "contain"
-                                  | "cover",
-                              })
-                            }
-                          >
-                            <option value="contain">Fit entire image</option>
-                            <option value="cover">Fill box</option>
-                          </select>
-                        </label>
-                      </>
+                      <p className="muted">
+                        Images automatically fill this box using a centred crop.
+                        The original image remains available for extraction.
+                      </p>
                     ) : (
                       <>
                         {field.kind !== "calculated" && (

@@ -198,6 +198,7 @@ def test_invalid_grants(secured, payload):
         ("delete", "/api/templates/missing"),
         ("post", "/api/templates/missing/generate"),
         ("post", "/api/templates/missing/restore"),
+        ("post", "/api/templates/missing/drafts/missing/restore"),
     ],
 )
 def test_viewer_cannot_mutate_any_route(secured, method, path):
@@ -231,6 +232,13 @@ def test_cross_site_write_rejected(secured):
             ).status_code
             == 403
         )
+
+
+def test_viewer_cannot_read_recently_deleted(secured):
+    api, headers = secured
+    api.put("/api/access/users", headers=headers(),
+            json={"email": "viewer@example.com", "role": "viewer"})
+    assert api.get("/api/templates/missing/deleted-drafts", headers=headers("viewer@example.com")).status_code == 403
 
 
 @pytest.mark.parametrize(

@@ -325,7 +325,8 @@ test("template builder errors, properties, clearing, dropdowns, formulas, and re
     .locator('[data-box-kind="field"]')
     .filter({ hasText: /^Photograph/ })
     .click();
-  await page.getByLabel("Image fitting").selectOption("cover");
+  await expect(page.getByText("Images automatically fill this box using a centred crop.", { exact: false })).toBeVisible();
+  await expect(page.getByLabel("Image fitting")).toHaveCount(0);
   await page.getByRole("button", { name: "Input field", exact: true }).click();
   await drag(
     page,

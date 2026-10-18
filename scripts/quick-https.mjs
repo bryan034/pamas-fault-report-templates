@@ -170,9 +170,9 @@ async function start() {
     let lastCheck = "No public response received";
     // A newly allocated hostname can take time to become reachable at the edge.
     console.log(publicMode
-      ? "Checking public app availability (up to 30 seconds)..."
-      : "Checking public email protection (up to 30 seconds; finishes as soon as verified)...");
-    const gateDeadline = Date.now() + 30_000;
+      ? "Checking public app availability (up to 90 seconds)..."
+      : "Checking public email protection (up to 90 seconds; finishes as soon as verified)...");
+    const gateDeadline = Date.now() + 90_000;
     while (Date.now() < gateDeadline) {
       try {
         const response = await request(
@@ -202,8 +202,8 @@ async function start() {
     if (!gated)
       throw new Error(
         publicMode
-          ? `Could not reach the public testing app within 30 seconds; connector will be stopped. ${lastCheck}.`
-          : `Could not confirm the public email-login gate within 30 seconds; connector will be stopped. ${lastCheck}. Check DNS/network connectivity and connector logs; email protection has not been disabled.`,
+          ? `Could not reach the public testing app within 90 seconds; connector will be stopped. ${lastCheck}.`
+          : `Could not confirm the public email-login gate within 90 seconds; connector will be stopped. ${lastCheck}. Check DNS/network connectivity and connector logs; email protection has not been disabled.`,
       );
     console.log(`\n${publicMode ? "Public HTTPS testing URL (NO LOGIN)" : "Email-protected testing URL"}: ${url}`);
     console.log(

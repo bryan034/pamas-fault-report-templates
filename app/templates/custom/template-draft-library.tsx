@@ -8,6 +8,7 @@ import {
   Pencil,
   Search,
   Trash2,
+  RotateCcw,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -46,6 +47,8 @@ export default function TemplateDraftLibrary({
   const { canEdit } = useApplicationAccess();
   const [template, setTemplate] = useState<TemplateDetail | null>(null),
     [drafts, setDrafts] = useState<CustomDraftSummary[]>([]);
+  const [deletedDrafts, setDeletedDrafts] = useState<CustomDraftSummary[]>([]);
+  const [showDeleted, setShowDeleted] = useState(false);
   const [search, setSearch] = useState(""),
     [company, setCompany] = useState(""),
     [from, setFrom] = useState(""),
@@ -60,16 +63,23 @@ export default function TemplateDraftLibrary({
   const [error, setError] = useState(""),
     [notice, setNotice] = useState("");
   const base = `/api/templates/${templateId}`;
+  const refreshDeleted = async () => {
+    const result = await templateJson<{drafts: CustomDraftSummary[]}>(`${base}/deleted-drafts`);
+    setDeletedDrafts(result.drafts);
+  };
   useEffect(() => {
     let cancelled = false;
     void Promise.all([
       templateJson<TemplateDetail>(base),
       templateJson<{ drafts: CustomDraftSummary[] }>(`${base}/drafts`),
+      canEdit ? templateJson<{ drafts: CustomDraftSummary[] }>(`${base}/deleted-drafts`)
+        : Promise.resolve({drafts: [] as CustomDraftSummary[]}),
     ])
-      .then(([t, d]) => {
+      .then(([t, d, trash]) => {
         if (!cancelled) {
           setTemplate(t);
           setDrafts(d.drafts);
+          setDeletedDrafts(trash.drafts);
         }
       })
       .catch((cause) => {
@@ -81,7 +91,7 @@ export default function TemplateDraftLibrary({
     return () => {
       cancelled = true;
     };
-  }, [base]);
+  }, [base, canEdit]);
   useEffect(() => {
     if (!notice) return;
     const timer = window.setTimeout(() => setNotice(""), 3000);
@@ -89,12 +99,12 @@ export default function TemplateDraftLibrary({
   }, [notice]);
   const companies = useMemo(
     () =>
-      [...new Set(drafts.map((draft) => draft.company).filter(Boolean))].sort(),
-    [drafts],
+      [...new Set([...drafts, ...deletedDrafts].map((draft) => draft.company).filter(Boolean))].sort(),
+    [drafts, deletedDrafts],
   );
   const shown = useMemo(
     () =>
-      drafts.filter(
+      (showDeleted ? deletedDrafts : drafts).filter(
         (draft) =>
           (!search ||
             `${draft.title} ${draft.company}`
@@ -104,7 +114,7 @@ export default function TemplateDraftLibrary({
           (!from || draft.report_date >= from) &&
           (!to || (!!draft.report_date && draft.report_date <= to)),
       ),
-    [drafts, search, company, from, to],
+    [drafts, deletedDrafts, showDeleted, search, company, from, to],
   );
   const rename = async (id: string) => {
     if (!title.trim()) {
@@ -140,11 +150,25 @@ export default function TemplateDraftLibrary({
         current.filter((draft) => draft.id !== deleting.id),
       );
       setDeleting(null);
-      setNotice("Draft deleted.");
+      setNotice("Draft moved to Recently Deleted. You can restore it for 30 days.");
+      await refreshDeleted();
     } catch (cause) {
       setNotice(
         cause instanceof Error ? cause.message : "Could not delete draft",
       );
+    } finally {
+      setBusy(false);
+    }
+  };
+  const restore = async (draft: CustomDraftSummary) => {
+    setBusy(true);
+    try {
+      const restored = await templateJson<CustomDraftSummary>(`${base}/drafts/${draft.id}/restore`, {method: "POST"});
+      setDeletedDrafts(current => current.filter(item => item.id !== draft.id));
+      setDrafts(current => [restored, ...current.filter(item => item.id !== draft.id)]);
+      setNotice(`Restored “${draft.title}”. Open Your drafts to continue editing.`);
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : "Could not restore draft");
     } finally {
       setBusy(false);
     }
@@ -185,11 +209,11 @@ export default function TemplateDraftLibrary({
   };
   const hasCompany =
       template?.definition.fields.some((field) => field.role === "company") ||
-      drafts.some((draft) => !!draft.company),
+      [...drafts, ...deletedDrafts].some((draft) => !!draft.company),
     hasDate =
       template?.definition.fields.some(
         (field) => field.role === "report_date",
-      ) || drafts.some((draft) => !!draft.report_date);
+      ) || [...drafts, ...deletedDrafts].some((draft) => !!draft.report_date);
   return (
     <main className="catalog-shell">
       <header className="catalog-header">
@@ -204,10 +228,23 @@ export default function TemplateDraftLibrary({
       <section className="catalog-content">
         <div className="catalog-intro">
           <span className="eyebrow">REPORTS</span>
-          <h2>Your drafts</h2>
-          <p>Open a saved report or start with empty fields.</p>
+          <h2>{showDeleted ? "Recently Deleted" : "Your drafts"}</h2>
+          <p>{showDeleted
+            ? "Restore deleted drafts within 30 days. After that they are permanently deleted."
+            : "Open a saved report or start with empty fields."}</p>
         </div>
         <div className="template-toolbar report-library-actions">
+          {canEdit && <>
+            <Button size="sm" aria-pressed={!showDeleted} variant={showDeleted ? "outline" : "default"} onClick={() => setShowDeleted(false)}>
+              Your drafts ({drafts.length})
+            </Button>
+            <Button size="sm" aria-pressed={showDeleted} variant={showDeleted ? "default" : "outline"} onClick={() => {
+              setShowDeleted(true);
+              void refreshDeleted().catch(cause => setNotice(cause.message || "Could not refresh Recently Deleted"));
+            }}>
+              <Trash2 size={15} /> Recently Deleted ({deletedDrafts.length})
+            </Button>
+          </>}
           <Button
             variant="outline"
             size="sm"
@@ -293,9 +330,9 @@ export default function TemplateDraftLibrary({
         ) : !shown.length ? (
           <div className="empty-drafts">
             <FilePlus2 />
-            <h3>{drafts.length ? "No matching drafts" : "No drafts yet"}</h3>
-            <p>Create a report and give it a title before saving.</p>
-            {canEdit && !template.archived && (
+            <h3>{(showDeleted ? deletedDrafts : drafts).length ? "No matching drafts" : showDeleted ? "No recently deleted drafts" : "No drafts yet"}</h3>
+            <p>{showDeleted ? "Deleted drafts appear here for up to 30 days." : "Create a report and give it a title before saving."}</p>
+            {canEdit && !showDeleted && !template.archived && (
               <Button asChild>
                 <a href={`/templates/custom/${templateId}/new`}>
                   Create report
@@ -307,7 +344,11 @@ export default function TemplateDraftLibrary({
           <div className="draft-grid">
             {shown.map((draft) => (
               <article className="draft-card" key={draft.id}>
-                <a
+                {showDeleted ? (
+                  <div className="draft-thumbnail">
+                    <img src={`${templateApiBase()}${base}/thumbnail`} alt="Deleted report template" />
+                  </div>
+                ) : <a
                   className="draft-thumbnail"
                   href={`/templates/custom/${templateId}/drafts/${draft.id}`}
                   aria-label={`Open ${draft.title}`}
@@ -316,7 +357,7 @@ export default function TemplateDraftLibrary({
                     src={`${templateApiBase()}${base}/thumbnail`}
                     alt="Blank report template"
                   />
-                </a>
+                </a>}
                 <div className="draft-card-body">
                   <div className="draft-card-heading">
                     {renaming === draft.id ? (
@@ -337,7 +378,7 @@ export default function TemplateDraftLibrary({
                     ) : (
                       <>
                         <h3>{draft.title}</h3>
-                        <div className="draft-card-actions">
+                        {!showDeleted && <div className="draft-card-actions">
                           {canEdit && (
                             <Button
                               variant="ghost"
@@ -359,7 +400,7 @@ export default function TemplateDraftLibrary({
                           >
                             <Download size={16} />
                           </Button>
-                        </div>
+                        </div>}
                       </>
                     )}
                   </div>
@@ -367,15 +408,23 @@ export default function TemplateDraftLibrary({
                   <time dateTime={draft.created_at}>
                     Created {new Date(draft.created_at).toLocaleString()}
                   </time>
+                  {showDeleted && <>
+                    <p>Deleted {new Date(draft.deleted_at!).toLocaleString()}</p>
+                    <p>Permanently deletes {new Date(draft.expires_at!).toLocaleString()}</p>
+                  </>}
                   <div className="draft-card-footer">
-                    <Button asChild size="sm" variant="outline">
+                    {showDeleted ? (
+                      <Button size="sm" disabled={busy} onClick={() => void restore(draft)} aria-label={`Restore ${draft.title}`}>
+                        <RotateCcw size={15} /> Restore draft
+                      </Button>
+                    ) : <Button asChild size="sm" variant="outline">
                       <a
                         href={`/templates/custom/${templateId}/drafts/${draft.id}`}
                       >
                         {canEdit ? "Edit draft" : "View draft"}
                       </a>
-                    </Button>
-                    {canEdit && (
+                    </Button>}
+                    {canEdit && !showDeleted && (
                       <Button
                         variant="ghost"
                         size="icon"
@@ -448,8 +497,8 @@ export default function TemplateDraftLibrary({
           <AlertDialogHeader>
             <AlertDialogTitle>Delete draft?</AlertDialogTitle>
             <AlertDialogDescription>
-              Delete &quot;{deleting?.title}&quot;? This action cannot be
-              undone.
+              Move &quot;{deleting?.title}&quot; to Recently Deleted? You can
+              restore it for 30 days before it is permanently deleted.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

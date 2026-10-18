@@ -80,11 +80,11 @@ roles, or implement and verify an appropriate identity integration separately.
 
 4. It prints an HTTPS URL **only after** an anonymous API request redirects to
    Cloudflare's Access login. If it cannot verify that redirect, it stops the
-   connector. The check allows up to 30 seconds for the new public endpoint to become
+   connector. The check allows up to 90 seconds for the new public endpoint to become
    reachable and reports the last HTTP status or network error on failure.
    This is a maximum, not a fixed delay: verification ends immediately on success.
    Provisioning the temporary hostname and starting Docker sidecars are separate
-   steps, so the entire startup can take longer than 30 seconds.
+   steps, so the entire startup can take longer than 90 seconds.
    It never retries without the email restriction. First check that
    Cloudflare's actual login sends a code only to the configured addresses.
 

@@ -57,6 +57,7 @@ test("viewer browses and downloads a saved report without mutation controls", as
     0,
   );
   await page.goto(`/templates/custom/${id}`);
+  await expect(page.getByRole("button", {name: /Recently Deleted/})).toHaveCount(0);
   await expect(
     page.getByRole("link", { name: "View draft", exact: true }),
   ).toBeVisible();

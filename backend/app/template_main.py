@@ -1,16 +1,18 @@
 """Shared service for all user-uploaded report templates."""
 
 import json
+import asyncio
+import logging
 import base64
 import os
 import re
 from typing import Literal
 from secrets import compare_digest
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from io import BytesIO
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, Query
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, JSONResponse
 from PIL import Image, UnidentifiedImageError
@@ -21,6 +23,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .template_database import (
     Draft,
+    DraftDeletion,
     DraftImage,
     DraftRevision,
     Template,
@@ -40,6 +43,17 @@ from .deployment import is_cloud, validate_environment
 from .word_conversion import docx_to_pdf, ConverterUnavailable, DOCX_MIME
 from .template_word import generate_docx
 from . import application_access as access
+from . import draft_trash
+
+
+async def cleanup_deleted_drafts():
+    while True:
+        await asyncio.sleep(draft_trash.CLEANUP_INTERVAL_SECONDS)
+        try:
+            await run_in_threadpool(draft_trash.cleanup_once)
+        except Exception:
+            # Never log database URLs, credentials or document payloads.
+            logging.getLogger(__name__).warning("Draft retention cleanup failed; retrying next interval")
 
 
 @asynccontextmanager
@@ -49,7 +63,14 @@ async def lifespan(_app):
     init_db()
     with Session(engine()) as db:
         versions.bootstrap(db)
-    yield
+    await run_in_threadpool(draft_trash.cleanup_once)
+    cleanup = asyncio.create_task(cleanup_deleted_drafts())
+    try:
+        yield
+    finally:
+        cleanup.cancel()
+        with suppress(asyncio.CancelledError):
+            await cleanup
 
 
 app = FastAPI(
@@ -177,7 +198,7 @@ def template_or_404(db, template_id):
 
 def draft_or_404(db, template_id, draft_id):
     draft = db.get(Draft, draft_id)
-    if draft is None or draft.template_id != template_id:
+    if draft is None or draft.template_id != template_id or db.get(DraftDeletion, draft_id):
         raise HTTPException(404, "Draft not found")
     return draft
 
@@ -553,6 +574,7 @@ def delete_archived_template(template_id: str, confirmed: bool = False, db: Sess
     draft_ids = select(Draft.id).where(Draft.template_id == template_id)
     db.execute(delete(DraftImage).where(DraftImage.draft_id.in_(draft_ids)))
     db.execute(delete(DraftRevision).where(DraftRevision.draft_id.in_(draft_ids)))
+    db.execute(delete(DraftDeletion).where(DraftDeletion.draft_id.in_(draft_ids)))
     db.execute(delete(Draft).where(Draft.template_id == template_id))
     db.execute(delete(TemplateSource).where(TemplateSource.revision_id.in_(select(TemplateRevision.id).where(TemplateRevision.template_id == template_id))))
     db.execute(delete(TemplateRevision).where(TemplateRevision.template_id == template_id))
@@ -612,9 +634,10 @@ def background(
 @app.get("/api/templates/{template_id}/drafts")
 def drafts(template_id: str, db: Session = Depends(get_db)):
     template = template_or_404(db, template_id)
+    draft_trash.purge_expired(db, template_id=template_id)
     rows = db.scalars(
         select(Draft)
-        .where(Draft.template_id == template_id)
+        .where(Draft.template_id == template_id, ~Draft.id.in_(select(DraftDeletion.draft_id)))
         .order_by(Draft.updated_at.desc())
     )
     result = {
@@ -630,6 +653,45 @@ def drafts(template_id: str, db: Session = Depends(get_db)):
     }
     db.commit()
     return result
+
+
+@app.get("/api/templates/{template_id}/deleted-drafts")
+def deleted_drafts(template_id: str, request: Request, db: Session = Depends(get_db)):
+    if request.state.application_user["role"] not in {"owner", "editor"}:
+        raise HTTPException(403, "Editor access is required to view Recently Deleted")
+    template = template_or_404(db, template_id)
+    draft_trash.purge_expired(db, template_id=template_id)
+    rows = db.execute(
+        select(Draft, DraftDeletion)
+        .join(DraftDeletion, DraftDeletion.draft_id == Draft.id)
+        .where(Draft.template_id == template_id,
+               DraftDeletion.deleted_at > draft_trash.utc_now() - draft_trash.RETENTION)
+        .order_by(DraftDeletion.deleted_at.desc())
+    ).all()
+    result = {"drafts": [{
+        **draft_summary(draft, TemplateDefinition.model_validate(versions.for_draft(db, template, draft).definition)),
+        "deleted_at": (draft_trash.expires_at(marker) - draft_trash.RETENTION).isoformat(),
+        "expires_at": draft_trash.expires_at(marker).isoformat(),
+    } for draft, marker in rows]}
+    db.commit()
+    return result
+
+
+@app.post("/api/templates/{template_id}/drafts/{draft_id}/restore")
+def restore_draft(template_id: str, draft_id: str, db: Session = Depends(get_db)):
+    template = template_or_404(db, template_id)
+    draft = db.scalar(select(Draft).where(Draft.id == draft_id, Draft.template_id == template_id).with_for_update())
+    if draft is None:
+        raise HTTPException(404, "Deleted draft not found")
+    marker = db.get(DraftDeletion, draft_id)
+    if marker is None:
+        raise HTTPException(409, "This draft is not in Recently Deleted")
+    if draft_trash.utc_now() >= draft_trash.expires_at(marker):
+        raise HTTPException(404, "The 30-day restoration period has expired")
+    db.delete(marker)
+    definition = TemplateDefinition.model_validate(versions.for_draft(db, template, draft).definition)
+    db.commit()
+    return draft_summary(draft, definition)
 
 
 @app.get("/api/templates/{template_id}/drafts/{draft_id}")
@@ -747,10 +809,12 @@ def rename_draft(
 
 @app.delete("/api/templates/{template_id}/drafts/{draft_id}")
 def delete_draft(template_id: str, draft_id: str, db: Session = Depends(get_db)):
-    draft = draft_or_404(db, template_id, draft_id)
-    db.execute(delete(DraftImage).where(DraftImage.draft_id == draft_id))
-    db.execute(delete(DraftRevision).where(DraftRevision.draft_id == draft_id))
-    db.delete(draft)
+    draft = db.scalar(select(Draft).where(Draft.id == draft_id, Draft.template_id == template_id).with_for_update())
+    if draft is None:
+        raise HTTPException(404, "Draft not found")
+    # Repeated DELETE must not extend the original retention deadline.
+    if db.get(DraftDeletion, draft_id) is None:
+        db.add(DraftDeletion(draft_id=draft_id, deleted_at=draft_trash.utc_now()))
     db.commit()
     return Response(status_code=204)
 
