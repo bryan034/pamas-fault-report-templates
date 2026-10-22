@@ -1,3 +1,4 @@
+import { createId } from "./create-id.ts";
 import type {
   Definition,
   PageBox,
@@ -13,7 +14,7 @@ export type CopiedBox = {
 };
 export type BoxSelection = { kind: "field" | "cover"; id: string };
 
-/** A field owns its cover; never copy or move that cover a second time. */
+/** Capture linked covers for copying; moving fields detaches those covers. */
 export function selectionBoxes(definition: Definition, selections: BoxSelection[]): CopiedBox[] {
   const fields = new Set(selections.filter(item => item.kind === "field").map(item => item.id));
   const seen = new Set<string>();
@@ -31,23 +32,29 @@ export function selectionBoxes(definition: Definition, selections: BoxSelection[
 /** Translate an entire selection from its drag-start snapshot, preserving spacing. */
 export function moveBoxes(definition: Definition, boxes: CopiedBox[], dx: number, dy: number): Definition {
   if (!boxes.length) return definition;
-  dx = Math.max(-Math.min(...boxes.map(item => item.box.x)),
-    Math.min(dx, Math.min(...boxes.map(item => 1 - item.box.x - item.box.width))));
-  dy = Math.max(-Math.min(...boxes.map(item => item.box.y)),
-    Math.min(dy, Math.min(...boxes.map(item => 1 - item.box.y - item.box.height))));
+  const bounds = boxes.map(item => item.box);
+  dx = Math.max(-Math.min(...bounds.map(box => box.x)),
+    Math.min(dx, Math.min(...bounds.map(box => 1 - box.x - box.width))));
+  dy = Math.max(-Math.min(...bounds.map(box => box.y)),
+    Math.min(dy, Math.min(...bounds.map(box => 1 - box.y - box.height))));
   const fields = new Map<string, PageBox>(), covers = new Map<string, PageBox>();
-  for (const {kind, box, cover} of boxes) {
+  for (const {kind, box} of boxes) {
     const moved = {page: box.page, width: box.width, height: box.height,
       x: box.x + dx, y: box.y + dy};
     if (kind === "cover") covers.set(box.id, moved);
     else {
       fields.set(box.id, moved);
-      if (cover) covers.set(box.id, moved);
     }
   }
   return {...definition,
     fields: definition.fields.map(item => ({...item, ...fields.get(item.id)})),
-    clear_areas: definition.clear_areas.map(item => ({...item, ...covers.get(item.id)})),
+    clear_areas: definition.clear_areas.map(item => {
+      if (covers.has(item.id)) return { ...item, ...covers.get(item.id) };
+      // The old background remains masked when its input is repositioned.
+      const moved = fields.get(item.id), original = definition.fields.find(field => field.id === item.id);
+      return moved && original && (moved.x !== original.x || moved.y !== original.y)
+        ? { ...item, id: createId() } : item;
+    }),
   };
 }
 export function duplicateBox(
@@ -56,12 +63,12 @@ export function duplicateBox(
   id: string,
   offset = 0.015,
 ) {
-  const shifted = {
-    ...copied.box,
-    id,
-    x: Math.min(1 - copied.box.width, copied.box.x + offset),
-    y: Math.min(1 - copied.box.height, copied.box.y + offset),
-  };
+  const bounds = copied.cover ? [copied.box, copied.cover] : [copied.box];
+  const dx = Math.max(-Math.min(...bounds.map(box => box.x)),
+    Math.min(offset, ...bounds.map(box => 1 - box.x - box.width)));
+  const dy = Math.max(-Math.min(...bounds.map(box => box.y)),
+    Math.min(offset, ...bounds.map(box => 1 - box.y - box.height)));
+  const shifted = { ...copied.box, id, x: copied.box.x + dx, y: copied.box.y + dy };
   if (copied.kind === "cover")
     return {
       ...definition,
@@ -79,8 +86,12 @@ export function duplicateBox(
     ],
     clear_areas: [
           ...definition.clear_areas,
-          { id, page: shifted.page, x: shifted.x, y: shifted.y,
-            width: shifted.width, height: shifted.height, color: copied.cover?.color || "#ffffff" },
+          { id, page: shifted.page,
+            x: copied.cover ? copied.cover.x + dx : shifted.x,
+            y: copied.cover ? copied.cover.y + dy : shifted.y,
+            width: copied.cover?.width ?? shifted.width,
+            height: copied.cover?.height ?? shifted.height,
+            color: copied.cover?.color || "#ffffff" },
         ],
   };
 }

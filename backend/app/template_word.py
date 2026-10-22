@@ -17,6 +17,7 @@ import pdfplumber
 import pypdfium2 as pdfium
 
 from .template_pdf import generate_pdf, generate_field_layers
+from .template_models import PageBox
 
 V = "urn:schemas-microsoft-com:vml"
 O = "urn:schemas-microsoft-com:office:office"
@@ -124,6 +125,10 @@ def _text_box(paragraph, line, x, y, width, identity, field):
 def generate_docx(blank_pdf, definition, report, images):
     # This also applies the same validation/auto-fit rules as PDF downloads.
     layers = generate_field_layers(definition, report, images)
+    report = report.model_copy(update={"layout": {
+        **report.layout,
+        **{key: PageBox.model_validate(box) for key, box in layers["layout"].items()},
+    }})
     artwork_definition = definition.model_copy(deep=True)
     artwork_report = report.model_copy(deep=True)
     for field in artwork_definition.fields:

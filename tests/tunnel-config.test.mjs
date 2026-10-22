@@ -6,7 +6,7 @@ const read = (file) =>
 test("local stack has no TLS gateway, public LAN listeners, or CA volume", () => {
   const compose = read("compose.yaml");
   assert.doesNotMatch(compose, /caddy|local-https|5175|0\.0\.0\.0:5173/);
-  for (const port of ["5173:8787", "8001:8000", "5434:5432"])
+  for (const port of ["5173:8080", "8001:8000", "5434:5432"])
     assert.ok(compose.includes(`127.0.0.1:${port}`));
   assert.ok(compose.includes("template-postgres:/var/lib/postgresql/data"));
   for (const file of [
@@ -21,8 +21,8 @@ test("tunnel fails on missing security settings and does not publish a port", ()
   for (const name of [
     "TUNNEL_TOKEN",
     "TEMPLATE_OWNER_EMAIL",
-    "ACCESS_TEAM_DOMAIN",
-    "ACCESS_AUD",
+    "GOOGLE_CLIENT_ID",
+    "GOOGLE_CLIENT_SECRET",
     "TEMPLATE_PUBLIC_ORIGIN",
   ]) {
     assert.ok(compose.includes(`${name}:`));
@@ -32,6 +32,6 @@ test("tunnel fails on missing security settings and does not publish a port", ()
   assert.doesNotMatch(compose, /ports:/);
   assert.match(compose, /networks: \[default, protected-tunnel\]/);
   assert.match(compose, /networks: \[protected-tunnel\]/);
-  assert.match(compose, /TEMPLATE_ACCESS_MODE: cloudflare/);
+  assert.match(compose, /TEMPLATE_ACCESS_MODE: google/);
   assert.match(read(".gitignore"), /\.env\*/);
 });

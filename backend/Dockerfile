@@ -12,6 +12,8 @@ WORKDIR /service
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 COPY app ./app
+COPY migrations ./migrations
+COPY alembic.ini ./
 
 # Non-root in both local and cloud containers. Compose retains its existing
 # startup command; the image default runs the already-installed environment.

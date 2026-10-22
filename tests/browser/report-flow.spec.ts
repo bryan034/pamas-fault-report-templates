@@ -137,6 +137,86 @@ test("unsaved report creation trial accepts values without creating templates or
   ).toBeVisible();
 });
 
+test("Word imports open the editor without a second PDF upload", async ({ page, request }) => {
+  const pdf = source();
+  const word = python("import runpy,sys;sys.path.insert(0,'tests');sys.stdout.buffer.write(runpy.run_path('tests/test_word_templates.py')['sample_word']())");
+  const detected = await request.post(api + "/api/templates/analyze", {
+    multipart: { pdf: { name: "layout.pdf", mimeType: "application/pdf", buffer: pdf } },
+  });
+  expect(detected.status()).toBe(200);
+  // Simulate conversion because the isolated browser host has no Word converter.
+  await page.route("**/api/templates/analyze", async (route) => {
+    await route.fulfill({ json: { ...await detected.json(), source_format: "docx", render_pdf: pdf.toString("base64") } });
+  });
+  await page.goto("/templates/new");
+  await page.getByLabel("Upload report PDF or Word document").setInputFiles({
+    name: "Exact Word.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", buffer: word,
+  });
+  await expect(page.getByLabel("Template name", { exact: true })).toHaveValue("Exact Word");
+  await expect(page.getByLabel("Word-exported PDF layout (optional)")).toHaveCount(0);
+  await expect(page.getByText("Word conversion can change line wrapping", { exact: false })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "View clean template", exact: true })).toBeVisible();
+});
+
+test("saving an incomplete draft shows each blank field as a separate card for three seconds", async ({ page, request }) => {
+  const template = await seed(request, "Blank field cards");
+  await page.goto(`/templates/custom/${template.id}/new`);
+  await page.getByLabel("Report title", { exact: true }).fill("Incomplete job");
+  await page.getByRole("button", { name: "Save draft", exact: true }).click();
+  const toast = page.getByRole("status");
+  await expect(toast).toContainText("Draft saved. Still blank:");
+  const cards = toast.getByRole("list", { name: "Blank fields" }).getByRole("listitem");
+  await expect(cards).toHaveText(["Company", "Date", "Photo", "Temperature"]);
+  await expect(page).toHaveURL(/\/drafts\//);
+  await expect(toast).toBeHidden({ timeout: 4500 });
+  await page.getByLabel("Company", { exact: true }).fill("Acme");
+  await page.getByRole("button", { name: "Save draft", exact: true }).click();
+  await expect(cards).toHaveText(["Date", "Photo", "Temperature"]);
+});
+
+test("ticks stamp at the default size on pointer down despite click jitter or dragging", async ({ page, request }) => {
+  const template = await seed(request, "Consistent tick stamps");
+  await page.goto(`/templates/custom/${template.id}/new`);
+  await page.getByLabel("Report title", { exact: true }).fill("Tick sizes");
+  const layer = page.getByLabel("Report editing areas, page 1", { exact: true });
+  await expect(layer).toBeVisible();
+  const placements = [
+    [0.5, 0.6, 0],
+    [0.6, 0.7, 1],
+    [0.7, 0.8, 0],
+    [0.8, 0.85, 40],
+    [0.1, 0.15, 1], // An existing input must not intercept the stamp.
+    [0.995, 0.995, 0], // Keep the full default stamp inside the page.
+  ];
+  for (const [index, [x, y, jitter]] of placements.entries()) {
+    await page.getByRole("button", { name: "Insert tick", exact: true }).click();
+    await layer.scrollIntoViewIfNeeded();
+    if (y > 0.9) await layer.evaluate((node) => node.scrollIntoView({ block: "end" }));
+    const box = (await layer.boundingBox())!;
+    await page.mouse.move(box.x + box.width * x, box.y + box.height * y);
+    await page.mouse.down();
+    await expect(page.locator("[data-shape-id]")).toHaveCount(index + 1);
+    await expect(page.getByRole("button", { name: "Insert tick", exact: true })).toBeVisible();
+    await page.mouse.move(box.x + box.width * x + jitter, box.y + box.height * y + jitter);
+    await page.mouse.up();
+    const hit = page.locator("[data-shape-id]").nth(index).locator(".report-shape-hit");
+    await expect(hit).toHaveAttribute("width", "0.035");
+    await expect(hit).toHaveAttribute("height", "0.025");
+    expect(Number(await hit.getAttribute("x"))).toBeLessThanOrEqual(0.965);
+    expect(Number(await hit.getAttribute("y"))).toBeLessThanOrEqual(0.975);
+  }
+  const box = (await layer.boundingBox())!;
+  await page.mouse.click(box.x + box.width * 0.4, box.y + box.height * 0.9);
+  await expect(page.locator("[data-shape-id]")).toHaveCount(placements.length);
+  await page.getByRole("button", { name: "Save draft", exact: true }).click();
+  await expect(page).toHaveURL(/\/drafts\//);
+  const saved = await (await request.get(`${api}/api/templates/${template.id}/drafts/${page.url().split("/").pop()}`)).json();
+  expect(saved.form.rectangles).toHaveLength(placements.length);
+  for (const shape of saved.form.rectangles) {
+    expect(shape).toMatchObject({ kind: "tick", width: 0.035, height: 0.025 });
+  }
+});
+
 test("field content follows hover dragging before release; fonts, one-shot ticks, deletion and future defaults", async ({
   page,
   request,
@@ -168,7 +248,7 @@ test("field content follows hover dragging before release; fonts, one-shot ticks
   await page
     .getByLabel("Report font", { exact: true })
     .selectOption("Helvetica-Bold");
-  await page.getByLabel("Report font size", { exact: true }).fill("12");
+  await page.getByLabel("Report font size", { exact: true }).selectOption("12");
   await page
     .getByLabel("Report font color", { exact: true })
     .evaluate((node) => {
@@ -211,7 +291,7 @@ test("field content follows hover dragging before release; fonts, one-shot ticks
   expect(saved.styles.company.color).toBe("#006600");
   expect(saved.values.company).toBe("Acme live");
   await page.getByLabel("Company", { exact: true }).focus();
-  await page.getByLabel("Report font size", { exact: true }).fill("14");
+  await page.getByLabel("Report font size", { exact: true }).selectOption("14");
   await page.getByRole("button", { name: "Save draft", exact: true }).click();
   const future = page.waitForRequest((req) =>
     req.url().endsWith("/report-defaults"),

@@ -3,6 +3,8 @@
 import {
   Children,
   useRef,
+  useImperativeHandle,
+  useLayoutEffect,
   useState,
   type CSSProperties,
   type ReactNode,
@@ -53,17 +55,21 @@ export default function ResizableReportWorkspace({
   const [width, setWidth] = useState(initialWidth);
   const root = useRef<HTMLDivElement | null>(null);
   const parts = Children.toArray(children);
-  const maximum = () =>
-    Math.max(260, Math.min(820, (root.current?.clientWidth || 1000) - 340));
+  const [maximum, setMaximum] = useState(660);
+  useImperativeHandle(workspaceRef, () => root.current!, []);
+  useLayoutEffect(() => {
+    if (!root.current) return;
+    const observer = new ResizeObserver(([entry]) => {
+      setMaximum(Math.max(260, Math.min(820, entry.contentRect.width - 340)));
+    });
+    observer.observe(root.current);
+    return () => observer.disconnect();
+  }, []);
   const resize = (next: number) =>
-    setWidth(Math.round(Math.max(260, Math.min(maximum(), next))));
+    setWidth(Math.round(Math.max(260, Math.min(maximum, next))));
   return (
     <div
-      ref={(element) => {
-        root.current = element;
-        if (typeof workspaceRef === "function") workspaceRef(element);
-        else if (workspaceRef) workspaceRef.current = element;
-      }}
+      ref={root}
       className="template-workspace report-workspace resizable-report-workspace"
       style={{ "--report-sidebar-width": `${width}px` } as CSSProperties}
     >
@@ -74,7 +80,7 @@ export default function ResizableReportWorkspace({
         aria-label="Resize report sidebar"
         aria-orientation="vertical"
         aria-valuemin={260}
-        aria-valuemax={maximum()}
+        aria-valuemax={maximum}
         aria-valuenow={width}
         className="report-sidebar-resizer"
         onPointerDown={(event) => {
@@ -100,7 +106,7 @@ export default function ResizableReportWorkspace({
             event.key === "Home"
               ? 260
               : event.key === "End"
-                ? maximum()
+                ? maximum
                 : width + (event.key === "ArrowLeft" ? -20 : 20),
           );
         }}

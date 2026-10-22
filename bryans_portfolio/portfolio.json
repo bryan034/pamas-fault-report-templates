@@ -1,7 +1,7 @@
 {
   "version": 1,
   "title": "Report Formatter",
-  "summary": "A private templated document management platform designed for a client's internal company use, with reusable PDF/Word templates, OCR-assisted reporting, and revision-safe drafts; prepared for production access through Cloudflare Tunnel and Access with administrator-managed membership.",
+  "summary": "A private document template application with PDF/Word imports, OCR-assisted reports, revision-pinned drafts and Google sign-in; prepared for Cloudflare Workers/Containers with Supabase PostgreSQL.",
   "category": "Document automation",
   "role": "Product designer and implementation reviewer",
   "technologies": [
@@ -14,9 +14,12 @@
     "ReportLab",
     "pdfplumber",
     "python-docx",
-    "LibreOffice Writer",
     "Cloudflare Tunnel",
-    "Cloudflare Access"
+    "ONLYOFFICE",
+    "Alembic",
+    "Google OAuth",
+    "Cloudflare Workers/Containers",
+    "Supabase"
   ],
   "status": "Independent project",
   "featured": true,

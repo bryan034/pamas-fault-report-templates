@@ -53,6 +53,7 @@ export type Definition = {
   extractions: Extraction[];
 };
 export type TemplateSummary = {
+  editor_kind?: "pdf" | "native-docx";
   id: string;
   title: string;
   page_count: number;
@@ -92,6 +93,7 @@ export type FieldStyle = {
   alignment?: "left" | "center" | "right" | null;
 };
 export type FieldLayers = {
+  layout?: Record<string, PageBox>;
   pdf: string | null;
   fields: string[];
   definition?: Definition;
@@ -140,13 +142,22 @@ export function templateApiBase(): string {
   );
 }
 
+export class TemplateRequestError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "TemplateRequestError";
+    this.status = status;
+  }
+}
+
 export async function templateRequest(
   path: string,
   init?: RequestInit,
 ): Promise<Response> {
   let response: Response;
   try {
-    response = await fetch(`${templateApiBase()}${path}`, init);
+    response = await fetch(`${templateApiBase()}${path}`, { ...init, credentials: "include" });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError")
       throw error;
@@ -156,17 +167,18 @@ export async function templateRequest(
   }
   if (!response.ok) {
     if (response.status === 401)
-      throw new Error("Your sign-in session expired or is missing. Reload the page to sign in again.");
+      throw new TemplateRequestError("Your sign-in session expired or is missing. Reload the page to sign in again.", 401);
     const problem = (await response.json().catch(() => null)) as {
       detail?: string | { msg: string }[];
     } | null;
     const detail = problem?.detail;
-    throw new Error(
+    throw new TemplateRequestError(
       typeof detail === "string"
         ? detail
         : Array.isArray(detail)
           ? detail.map((item: { msg: string }) => item.msg).join("; ")
           : `Request failed (${response.status})`,
+      response.status,
     );
   }
   return response;

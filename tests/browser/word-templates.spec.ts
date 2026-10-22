@@ -74,7 +74,7 @@ test("PDF templates export Word and PDF without an original-template download bu
   expect(await original.body()).toEqual(source); // Hiding the button does not delete source bytes.
 });
 
-test("real Word upload uses the shared builder, editing, defaults, saved drafts and both exports", async ({
+test("legacy converted Word templates keep the shared builder, defaults, drafts and both exports", async ({
   page,
   request,
 }) => {
@@ -94,13 +94,17 @@ test("real Word upload uses the shared builder, editing, defaults, saved drafts 
   const source = python(
     "import runpy,sys;sys.path.insert(0,'tests');sys.stdout.buffer.write(runpy.run_path('tests/test_word_templates.py')['sample_word']())",
   );
-  await page.goto("/templates/new");
-  await page.getByLabel("Upload report PDF or Word document").setInputFiles({
-    name: "Word inspection.docx",
-    mimeType:
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    buffer: source,
-  });
+  // Seed through the retained legacy API, not the new native DOCX upload UI.
+  const document = { name: "Word inspection.docx", mimeType:
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document", buffer: source };
+  const analysis = await request.post(wordApi + "/api/templates/analyze", { multipart: { pdf: document } });
+  expect(analysis.ok()).toBeTruthy();
+  const saved = await request.post(wordApi + "/api/templates", { multipart: {
+    title: "Word inspection", pdf: document, definition_json: JSON.stringify((await analysis.json()).definition),
+  } });
+  expect(saved.ok()).toBeTruthy();
+  const template = await saved.json();
+  await page.goto(`/templates/custom/${template.id}/edit`);
   await expect(
     page.getByRole("toolbar", { name: "Template editing tools" }),
   ).toBeVisible();
@@ -119,10 +123,10 @@ test("real Word upload uses the shared builder, editing, defaults, saved drafts 
     page.getByRole("heading", { name: "Template saved successfully" }),
   ).toBeVisible();
   const listing = await (await request.get(wordApi + "/api/templates")).json();
-  const template = listing.templates.find(
+  const listed = listing.templates.find(
     (item: { title: string }) => item.title === "Word inspection",
   );
-  expect(template).toBeTruthy();
+  expect(listed).toBeTruthy();
   await page.goto(`/templates/custom/${template.id}/edit`);
   await expect(page.getByLabel("Default value for new reports")).toHaveValue(
     "Word default",

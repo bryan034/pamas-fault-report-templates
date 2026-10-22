@@ -1,6 +1,6 @@
 "use client";
 // Full navigation avoids the Vinext Link runtime mismatch.
-import { useEffect, useRef, useState, type PointerEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type PointerEvent } from "react";
 import { ArrowLeft, ImagePlus, Plus, Redo2, Undo2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -39,6 +39,7 @@ import {
   type CopiedBox,
   type Edge,
 } from "@/lib/template-editing";
+import { fontSizes } from "@/lib/font-sizes";
 import TemplateEditor from "@/app/templates/custom/template-editor";
 import { calculationProblems } from "@/lib/template-calculations";
 import { createId } from "@/lib/create-id";
@@ -76,6 +77,7 @@ export default function TemplateBuilder({
 }) {
   const history = useEditHistory<DocumentState | null>(null);
   const resetHistory = history.reset;
+  const setHistory = history.set;
   const definition = history.value?.definition,
     title = history.value?.title || "";
   const [trial, setTrial] = useState<Uint8Array | null>(null);
@@ -88,6 +90,7 @@ export default function TemplateBuilder({
     error?: string;
   } | null>(null);
   const root = useRef<HTMLElement>(null);
+  const cleanAreasRendered = useRef("");
   const pendingNavigation = useRef<string | null>(null);
   const [original, setOriginal] = useState<Uint8Array | null>(null),
     [cleaned, setCleaned] = useState<Uint8Array | null>(null);
@@ -113,10 +116,6 @@ export default function TemplateBuilder({
     font: "Times-Roman",
     font_size: 16,
     color: "#000000",
-  });
-  const [fontSizeDraft, setFontSizeDraft] = useState({
-    key: "default:16",
-    value: "16",
   });
   const labelInput = useRef<HTMLInputElement>(null);
   const nameNewField = useRef<string | null>(null);
@@ -225,13 +224,12 @@ export default function TemplateBuilder({
     pendingNavigation.current = id;
     setSelected({ kind: "field", id });
     setCoverOnly(false);
-    setCleaned(null);
     setMode(null);
     if (target.kind === "image") setExtractionImage(id);
   };
   useEffect(() => {
     const id = pendingNavigation.current;
-    if (!id || selected?.id !== id || coverOnly || cleaned) return;
+    if (!id || selected?.id !== id || coverOnly) return;
     const frame = requestAnimationFrame(() => {
       const box = root.current?.querySelector<SVGElement>(
         `[data-box-kind="field"][data-box-id="${CSS.escape(id)}"]`,
@@ -322,11 +320,30 @@ export default function TemplateBuilder({
           : current,
       record,
     );
-    setCleaned(null);
     setDirty(true);
     setSaved(null);
     setError("");
   };
+  const fitFieldLabel = useCallback((expected: TemplateField, minimumWidth: number, minimumHeight: number) => {
+    let changed = false;
+    setHistory(current => {
+      if (!current) return current;
+      const field = current.definition.fields.find(item => item.id === expected.id);
+      if (field !== expected || field.kind === "image") return current;
+      const page = current.definition.pages[field.page];
+      const width = Math.min(1, Math.max(field.width, minimumWidth / page.width));
+      const height = Math.min(1, Math.max(field.height, minimumHeight / page.height));
+      if (width - field.width < .000001 && height - field.height < .000001) return current;
+      changed = true;
+      return { ...current, definition: { ...current.definition,
+        fields: current.definition.fields.map(item => item === field ? { ...item,
+          width, height, x: Math.min(item.x, 1 - width), y: Math.min(item.y, 1 - height),
+        } : item),
+        // Covers retain the area chosen by the user, including attached covers.
+      } };
+    }, false);
+    if (changed) { setDirty(true); setSaved(null); }
+  }, [setHistory]);
   const updateField = (updates: Partial<TemplateField>) =>
     change((current) => ({
       ...current,
@@ -380,9 +397,17 @@ export default function TemplateBuilder({
               fields: current.fields.map((item) =>
                 item.id === selection.id ? { ...item, ...updates } : item,
               ),
-              clear_areas: current.clear_areas.map((item) =>
-                item.id === selection.id ? { ...item, ...updates } : item,
-              ),
+              clear_areas: current.clear_areas.map((item) => {
+                if (item.id !== selection.id) return item;
+                if (drag.current?.action === "draw") return { ...item, ...updates };
+                const field = current.fields.find(field => field.id === selection.id);
+                if (!field || (drag.current && drag.current.action !== "move")) return item;
+                const moved = (updates.x !== undefined && updates.x !== field.x)
+                  || (updates.y !== undefined && updates.y !== field.y)
+                  || (updates.page !== undefined && updates.page !== field.page);
+                // Give the stationary cover its own identity on the first move.
+                return moved ? { ...item, id: createId() } : item;
+              }),
             }
           : {
               ...current,
@@ -421,7 +446,6 @@ export default function TemplateBuilder({
     setBoxDragging(false);
     if (forward) history.redo();
     else history.undo();
-    setCleaned(null);
     setDirty(true);
     setSaved(null);
   };
@@ -602,6 +626,7 @@ export default function TemplateBuilder({
     return data;
   };
   const previewClean = async () => {
+    if (!definition) return;
     if (issues.length) {
       setError(issues.map((issue) => issue.message).join(" "));
       return;
@@ -613,6 +638,7 @@ export default function TemplateBuilder({
         method: "POST",
         body: payload(),
       });
+      cleanAreasRendered.current = JSON.stringify(definition.clear_areas);
       setCleaned(new Uint8Array(await response.arrayBuffer()));
       setMode(null);
       setSelected(null);
@@ -624,6 +650,30 @@ export default function TemplateBuilder({
       setBusy("");
     }
   };
+  const isCleanPreview = Boolean(cleaned);
+  const cleanAreasKey = JSON.stringify(definition?.clear_areas || []);
+  useEffect(() => {
+    if (!isCleanPreview || !definition || boxDragging || cleanAreasRendered.current === cleanAreasKey) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await templateRequest("/api/templates/review", {
+          method: "POST", body: payload(), signal: controller.signal,
+        });
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        if (!controller.signal.aborted) {
+          cleanAreasRendered.current = JSON.stringify(definition.clear_areas);
+          setCleaned(bytes);
+        }
+      } catch (cause) {
+        if (!controller.signal.aborted)
+          setError(cause instanceof Error ? cause.message : "Could not refresh clean template");
+      }
+    }, 180);
+    return () => { controller.abort(); window.clearTimeout(timer); };
+    // payload captures the same definition and upload inputs listed here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCleanPreview, definition, original, file, boxDragging, cleanAreasKey]);
   const save = async () => {
     if (issues.length) {
       setError(issues.map((issue) => issue.message).join(" "));
@@ -673,7 +723,7 @@ export default function TemplateBuilder({
     selection?: Selection,
     edge?: Edge,
   ) => {
-    if (busy || cleaned || !definition) return;
+    if (busy || !definition) return;
     event.stopPropagation();
     const p = point(event);
     p.svg.setPointerCapture(event.pointerId);
@@ -844,10 +894,19 @@ export default function TemplateBuilder({
     setBusy("Detecting scanned page locally…");
     try {
       const fields = await detectScannedPage(original, page);
-      change((current) => ({
-        ...current,
-        fields: [...current.fields, ...fields].slice(0, 300),
-      }));
+      change((current) => {
+        // Every scanned field sits over a page image. Add each field and its
+        // attached cover atomically, including when nearing the box limits.
+        const capacity = Math.max(0, Math.min(300-current.fields.length, 400-current.clear_areas.length));
+        const added = fields.slice(0, capacity);
+        return {
+          ...current,
+          fields: [...current.fields, ...added],
+          clear_areas: [...current.clear_areas, ...added.map(
+            ({ id, page, x, y, width, height }) => ({ id, page, x, y, width, height, color: "#ffffff" }),
+          )],
+        };
+      });
       setScanned((current) => current.filter((item) => item !== page));
       if (!fields.length)
         setError("No closed outlines found. Add fields manually.");
@@ -885,7 +944,6 @@ export default function TemplateBuilder({
     }
   };
   const effectiveStyle = field || style;
-  const fontSizeKey = `${field?.id || "default"}:${effectiveStyle.font_size}`;
   const fontChange = (updates: Partial<typeof style>) => {
     if (field) updateField(updates);
     else setStyle((current) => ({ ...current, ...updates }));
@@ -904,7 +962,6 @@ export default function TemplateBuilder({
           onClick={() => {
             setMode("input");
             setCoverOnly(false);
-            setCleaned(null);
           }}
         >
           <Plus size={14} /> Input field
@@ -915,7 +972,6 @@ export default function TemplateBuilder({
           onClick={() => {
             setMode("image");
             setCoverOnly(false);
-            setCleaned(null);
           }}
         >
           <ImagePlus size={14} /> Image box
@@ -925,7 +981,6 @@ export default function TemplateBuilder({
           variant={mode === "cover" ? "default" : "outline"}
           onClick={() => {
             setMode("cover");
-            setCleaned(null);
           }}
         >
           <Plus size={14} /> Cover box
@@ -947,36 +1002,18 @@ export default function TemplateBuilder({
         </label>
         <label>
           Font size{" "}
-          <Input
+          <select
             aria-label="Font size"
-            list="template-font-sizes"
-            inputMode="decimal"
-            value={
-              fontSizeDraft.key === fontSizeKey
-                ? fontSizeDraft.value
-                : String(effectiveStyle.font_size)
-            }
+            value={effectiveStyle.font_size}
             disabled={selected?.kind === "cover" || field?.kind === "image"}
-            onChange={(event) => {
-              setFontSizeDraft({ key: fontSizeKey, value: event.target.value });
-              const size = Number(event.target.value);
-              if (size >= 4 && size <= 72) fontChange({ font_size: size });
-            }}
-            onBlur={() =>
-              setFontSizeDraft({
-                key: fontSizeKey,
-                value: String(effectiveStyle.font_size),
-              })
-            }
-          />
+            onChange={(event) => fontChange({ font_size: Number(event.target.value) })}
+          >
+            {!fontSizes.includes(effectiveStyle.font_size) && (
+              <option value={effectiveStyle.font_size} disabled>{effectiveStyle.font_size}</option>
+            )}
+            {fontSizes.map(size => <option key={size} value={size}>{size}</option>)}
+          </select>
         </label>
-        <datalist id="template-font-sizes">
-          {[8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 36, 48, 72].map(
-            (size) => (
-              <option value={size} key={size} />
-            ),
-          )}
-        </datalist>
         <label>
           Alignment{" "}
           <select
@@ -1646,26 +1683,7 @@ export default function TemplateBuilder({
             <TemplatePdfViewer
               source={cleaned || original}
               overlay={
-                cleaned
-                  ? (page) => (
-                      <svg
-                        className="template-default-layer"
-                        viewBox="0 0 1 1"
-                        preserveAspectRatio="none"
-                        aria-label={`Template defaults, page ${page + 1}`}
-                      >
-                        {definition.fields
-                          .filter((item) => item.page === page)
-                          .map((item) => (
-                            <TemplateDefaultPreview
-                              key={item.id}
-                              field={item}
-                              page={definition.pages[page]}
-                            />
-                          ))}
-                      </svg>
-                    )
-                  : (page) => (
+                (page) => (
                       <svg
                         className="template-box-layer"
                         viewBox="0 0 1 1"
@@ -1743,35 +1761,16 @@ export default function TemplateBuilder({
                                 <TemplateDefaultPreview
                                   field={boxField}
                                   page={definition.pages[page]}
+                                  onFit={boxDragging ? undefined : fitFieldLabel}
                                 />
                               )}
                               {boxField && !templateDefaultText(boxField) && (
-                                <text
-                                  x={box.x + (boxField.alignment === "left"
-                                    ? Math.min(.01, box.width * .05)
-                                    : boxField.alignment === "right"
-                                      ? box.width - Math.min(.01, box.width * .05)
-                                      : box.width / 2)}
-                                  y={box.y + box.height / 2}
-                                  textAnchor={boxField.alignment === "left" ? "start" : boxField.alignment === "right" ? "end" : "middle"}
-                                  dominantBaseline="middle"
-                                  fill={boxField.color}
-                                  fontFamily={
-                                    boxField.font.startsWith("Times")
-                                      ? "Times New Roman"
-                                      : boxField.font.startsWith("Helvetica")
-                                        ? "Arial"
-                                        : "Courier New"
-                                  }
-                                  fontSize={Math.min(
-                                    box.height * 0.65,
-                                    boxField.font_size /
-                                      definition.pages[page].height,
-                                  )}
-                                  pointerEvents="none"
-                                >
-                                  {boxField.label}
-                                </text>
+                                <TemplateDefaultPreview
+                                  field={boxField}
+                                  page={definition.pages[page]}
+                                  onFit={boxDragging ? undefined : fitFieldLabel}
+                                  showLabel
+                                />
                               )}
                               {active &&
                                 !mode &&

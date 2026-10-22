@@ -3,9 +3,26 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.web
-    ports:
-      # Laptop-only development. Other devices use the protected tunnel URL.
-      - "127.0.0.1:5173:8787"
+      target: development
+    environment:
+      DEV_USE_POLLING: "true"
+      DEV_PUBLIC_ORIGIN: ${TEMPLATE_PUBLIC_ORIGIN:-http://localhost:5173}
+      TEMPLATE_DEV_API_PROXY: http://template-service:8000
+    # Mount source only: never overlay Linux node_modules with macOS packages,
+    # or mount .env secrets into Vite's watched source tree.
+    volumes:
+      - ./app:/web/app:ro
+      - ./components:/web/components:ro
+      - ./lib:/web/lib:ro
+      - ./scripts:/web/scripts:ro
+      - ./vendor:/web/vendor:ro
+      - ./vite.config.ts:/web/vite.config.ts:ro
+      - ./next.config.ts:/web/next.config.ts:ro
+      - ./tsconfig.json:/web/tsconfig.json:ro
+      - ./postcss.config.mjs:/web/postcss.config.mjs:ro
+      # Writable for the same ignored PDF/OCR worker assets npm run dev prepares.
+      - ./public:/web/public
+    # Gateway publishes port 5173; keep Vite private on the Docker network.
     depends_on:
       template-service:
         condition: service_healthy
@@ -15,9 +32,25 @@ services:
   template-service:
     build:
       context: ./backend
-    command: ["uv", "run", "--frozen", "--no-dev", "uvicorn", "app.template_main:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: ["uv", "run", "--frozen", "--no-dev", "uvicorn", "app.template_main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/service/app"]
+    volumes:
+      - ./backend/app:/service/app:ro
+      - ./backend/migrations:/service/migrations:ro
+      - ./backend/alembic.ini:/service/alembic.ini:ro
     environment:
+      WATCHFILES_FORCE_POLLING: "true"
       TEMPLATE_DATABASE_URL: postgresql+psycopg://templates:${FAULT_REPORT_DB_PASSWORD:?Set FAULT_REPORT_DB_PASSWORD in .env}@template-db:5432/templates
+      TEMPLATE_MIGRATE_ON_START: ${TEMPLATE_MIGRATE_ON_START:-true}
+      TEMPLATE_ACCESS_MODE: ${TEMPLATE_ACCESS_MODE:-local}
+      TEMPLATE_OWNER_EMAIL: ${TEMPLATE_OWNER_EMAIL:-bry.io456@gmail.com}
+      TEMPLATE_PUBLIC_ORIGIN: ${TEMPLATE_PUBLIC_ORIGIN:-http://localhost:5173}
+      TEMPLATE_AUTH_ORIGIN: ${TEMPLATE_AUTH_ORIGIN:-http://localhost:8001}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      ONLYOFFICE_JWT_SECRET: ${ONLYOFFICE_JWT_SECRET:?Set a random secret of at least 32 characters in .env}
+      WORD_CONVERSION_ENGINE: onlyoffice
+      ONLYOFFICE_INTERNAL_URL: http://onlyoffice
+      ONLYOFFICE_CALLBACK_BASE: http://template-service:8000
     ports:
       - "127.0.0.1:8001:8000"
     depends_on:
@@ -30,6 +63,42 @@ services:
       retries: 8
       start_period: 20s
     restart: unless-stopped
+
+  word-gateway:
+    image: nginxinc/nginx-unprivileged:stable-alpine
+    ports:
+      - "127.0.0.1:5173:8080"
+    volumes:
+      - ./deploy/onlyoffice/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      web:
+        condition: service_started
+      onlyoffice:
+        condition: service_healthy
+    read_only: true
+    tmpfs: [/tmp]
+    restart: unless-stopped
+
+  onlyoffice:
+    image: onlyoffice/documentserver:${ONLYOFFICE_IMAGE_TAG:-9.3.1}
+    environment:
+      JWT_ENABLED: "true"
+      JWT_SECRET: ${ONLYOFFICE_JWT_SECRET:?Set a random secret of at least 32 characters in .env}
+      JWT_HEADER: Authorization
+      # Required for the private Docker-network storage API, not cloud metadata.
+      ALLOW_PRIVATE_IP_ADDRESS: "true"
+      ALLOW_META_IP_ADDRESS: "false"
+    shm_size: 1gb
+    volumes:
+      - onlyoffice-data:/var/www/onlyoffice/Data
+      - onlyoffice-library:/var/lib/onlyoffice
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost/healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 90s
 
   template-db:
     image: postgres:17-alpine
@@ -50,3 +119,5 @@ services:
 
 volumes:
   template-postgres:
+  onlyoffice-data:
+  onlyoffice-library:

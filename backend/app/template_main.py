@@ -30,20 +30,24 @@ from .template_database import (
     TemplateArchive,
     TemplateRevision,
     TemplateSource,
+    WordDocument,
     engine,
     get_db,
-    init_db,
 )
 from .template_models import TemplateDefinition, TemplateReport, resolved_values, template_defaults
 from .template_pdf import analyze_pdf, clean_pdf, generate_pdf, generate_field_layers
+from .table_detection import ScannedLayout, refine_table_layout
 from .report_configuration import FutureConfiguration
 from . import template_versions as versions
 from . import preview_assets
 from .deployment import is_cloud, validate_environment
+from .migrations import upgrade_database, check_database
 from .word_conversion import docx_to_pdf, ConverterUnavailable, DOCX_MIME
 from .template_word import generate_docx
 from . import application_access as access
 from . import draft_trash
+from . import google_auth
+from . import onlyoffice
 
 
 async def cleanup_deleted_drafts():
@@ -60,9 +64,14 @@ async def cleanup_deleted_drafts():
 async def lifespan(_app):
     validate_environment()
     access.validate_settings()
-    init_db()
+    if os.environ.get("TEMPLATE_MIGRATE_ON_START", "true").lower() == "true":
+        upgrade_database()
+    else:
+        check_database()
     with Session(engine()) as db:
         versions.bootstrap(db)
+        onlyoffice.purge_expired(db)
+        db.commit()
     await run_in_threadpool(draft_trash.cleanup_once)
     cleanup = asyncio.create_task(cleanup_deleted_drafts())
     try:
@@ -76,48 +85,57 @@ async def lifespan(_app):
 app = FastAPI(
     title="Shared PDF Template Service",
     lifespan=lifespan,
-    docs_url=None if is_cloud() else "/docs",
-    redoc_url=None if is_cloud() else "/redoc",
-    openapi_url=None if is_cloud() else "/openapi.json",
+    docs_url=None if is_cloud() or os.environ.get("TEMPLATE_ACCESS_MODE") == "google" else "/docs",
+    redoc_url=None if is_cloud() or os.environ.get("TEMPLATE_ACCESS_MODE") == "google" else "/redoc",
+    openapi_url=None if is_cloud() or os.environ.get("TEMPLATE_ACCESS_MODE") == "google" else "/openapi.json",
 )
 app.include_router(access.router)
-app.add_middleware(
-    CORSMiddleware,
-    # 0.0.0.0 can be opened on the hosting laptop, but other devices must use
-    # its real LAN IP. Keep this development allowance disabled in cloud mode.
-    allow_origin_regex=None if is_cloud() else r"^https?://(localhost|127\.0\.0\.1|0\.0\.0\.0|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?$",
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
-    allow_headers=["Content-Type"],
-    expose_headers=["Content-Disposition"],
-)
+app.include_router(google_auth.router)
+app.include_router(onlyoffice.router)
 
 
 @app.middleware("http")
 async def cloud_service_auth(request, call_next):
-    if is_cloud():
+    # Only the headless converter's expiring source GET uses a signed link
+    # rather than a browser session. No native-editor callbacks are exposed.
+    word_bridge = onlyoffice.bridge_request(request)
+    if is_cloud() and not word_bridge:
         expected = os.environ.get("TEMPLATE_SERVICE_TOKEN", "")
         supplied = request.headers.get("X-Template-Service-Token", "")
         if len(expected) < 32 or not compare_digest(supplied.encode(), expected.encode()):
             return JSONResponse({"detail": "Service authentication required"}, status_code=401, headers={"Cache-Control": "no-store"})
     try:
-        if request.url.path != "/api/health" and request.method != "OPTIONS":
+        if not word_bridge and request.url.path not in {"/api/health", *google_auth.PUBLIC_PATHS} and request.method != "OPTIONS":
             user = await run_in_threadpool(access.identity, request)
             request.state.application_user = user
             if access.protected() and request.method not in {"GET", "HEAD", "OPTIONS"}:
                 if user["role"] == "viewer":
                     raise HTTPException(403, "Viewers cannot change templates or reports")
                 origin = request.headers.get("Origin")
-                if request.headers.get("Sec-Fetch-Site") == "cross-site" or (not is_cloud() and origin and origin != os.environ["TEMPLATE_PUBLIC_ORIGIN"]):
+                if request.headers.get("Sec-Fetch-Site") == "cross-site" or origin != google_auth.public_origin():
                     raise HTTPException(403, "Cross-site writes are not allowed")
         response = await call_next(request)
     except HTTPException as error:
         response = JSONResponse({"detail": error.detail}, status_code=error.status_code)
     except ValueError:
         response = JSONResponse({"detail": "Application access is not configured"}, status_code=503)
-    if access.protected():
+    if os.environ.get("TEMPLATE_ACCESS_MODE") == "google" or is_cloud():
         response.headers["Cache-Control"] = "private, no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
     return response
+
+
+# CORS wraps authentication too, so localhost clients can read 401/403 responses.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[os.environ["TEMPLATE_PUBLIC_ORIGIN"]] if os.environ.get("TEMPLATE_ACCESS_MODE") == "google" and os.environ.get("TEMPLATE_PUBLIC_ORIGIN") else [],
+    allow_origin_regex=None if is_cloud() or os.environ.get("TEMPLATE_ACCESS_MODE") == "google" else r"^https?://(localhost|127\.0\.0\.1|0\.0\.0\.0|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?$",
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    allow_headers=["Content-Type"],
+    expose_headers=["Content-Disposition"],
+)
 
 
 def parse(model, payload):
@@ -144,17 +162,26 @@ async def read_pdf(file):
     return payload
 
 
-async def read_template(file):
+async def read_template(file, reference_pdf=None):
     payload = await file.read(20 * 1024 * 1024 + 1)
     if len(payload) > 20 * 1024 * 1024:
         raise HTTPException(413, "Document exceeds the 20 MB limit")
     filename = (file.filename or "template.pdf").replace("\\", "/").rsplit("/", 1)[-1][:255]
     if payload.startswith(b"%PDF-"):
+        if reference_pdf is not None:
+            raise HTTPException(422, "A reference PDF can only accompany a Word document")
         return "pdf", payload, payload, filename
     if not filename.lower().endswith(".docx"):
         raise HTTPException(415, "Upload a PDF or Word .docx document. Save older .doc files as .docx first.")
     try:
-        converted = await run_in_threadpool(docx_to_pdf, payload)
+        if reference_pdf is not None:
+            from .word_conversion import validate_docx
+            validate_docx(payload)
+            converted = await read_pdf(reference_pdf)
+            from .template_pdf import inspect_pdf
+            await run_in_threadpool(inspect_pdf, converted)
+        else:
+            converted = await run_in_threadpool(docx_to_pdf, payload)
     except ConverterUnavailable as error:
         raise HTTPException(503, str(error)) from error
     except ValueError as error:
@@ -208,7 +235,8 @@ def summary(template):
         "id": template.id,
         "title": template.title,
         "created_at": template.created_at.isoformat(),
-        "page_count": len(template.definition["pages"]),
+        "page_count": 0 if onlyoffice.native(template) else len(template.definition["pages"]),
+        "editor_kind": "native-docx" if onlyoffice.native(template) else "pdf",
         "field_count": len(template.definition["fields"]),
     }
 
@@ -300,8 +328,8 @@ def health(db: Session = Depends(get_db)):
 
 
 @app.post("/api/templates/analyze")
-async def analyze(pdf: UploadFile = File(...)):
-    kind, _, payload, _ = await read_template(pdf)
+async def analyze(pdf: UploadFile = File(...), reference_pdf: UploadFile | None = File(None)):
+    kind, _, payload, _ = await read_template(pdf, reference_pdf)
     try:
         result = await run_in_threadpool(analyze_pdf, payload)
         return {**result, "source_format": kind, "render_pdf": base64.b64encode(payload).decode() if kind == "docx" else None}
@@ -309,11 +337,28 @@ async def analyze(pdf: UploadFile = File(...)):
         raise HTTPException(422, str(error) or "Could not analyze PDF") from error
 
 
+@app.post("/api/templates/analyze-scanned-layout")
+def analyze_scanned_layout(layout: ScannedLayout):
+    if any(not (0 <= l < r <= layout.size.width and 0 <= t < b <= layout.size.height)
+           for l, t, r, b in layout.cells):
+        raise HTTPException(422, "Scanned cells must stay inside the page")
+    if any(not (0 <= w.x0 < w.x1 <= layout.size.width and 0 <= w.top < w.bottom <= layout.size.height)
+           for w in layout.words):
+        raise HTTPException(422, "Scanned words must stay inside the page")
+    words = [word.model_dump() for word in layout.words]
+    unique = []
+    for cell in sorted(layout.cells, key=lambda c: (c[2]-c[0])*(c[3]-c[1])):
+        if not any(all(abs(a-b) <= 2 for a, b in zip(cell, other)) for other in unique):
+            unique.append(cell)
+    cells, fields = refine_table_layout(unique, words, layout.page, layout.size, layout.shaded)
+    return {"cells": cells, "fields": [field.model_dump(mode="json") for field in fields]}
+
+
 @app.post("/api/templates/review")
-async def review(pdf: UploadFile = File(...), definition_json: str = Form(...)):
+async def review(pdf: UploadFile = File(...), definition_json: str = Form(...), reference_pdf: UploadFile | None = File(None)):
     definition = parse(TemplateDefinition, definition_json)
     try:
-        _, _, source, _ = await read_template(pdf)
+        _, _, source, _ = await read_template(pdf, reference_pdf)
         blank, _ = await run_in_threadpool(clean_pdf, source, definition)
         return Response(
             blank, media_type="application/pdf", headers={"Cache-Control": "no-store"}
@@ -325,6 +370,7 @@ async def review(pdf: UploadFile = File(...), definition_json: str = Form(...)):
 @app.post("/api/templates")
 async def create_template(
     pdf: UploadFile = File(...),
+    reference_pdf: UploadFile | None = File(None),
     definition_json: str = Form(...),
     title: str = Form(...),
     reviewed: bool = Form(False),
@@ -336,7 +382,7 @@ async def create_template(
         raise HTTPException(
             422, "Review the template and add at least one field before saving"
         )
-    kind, original, source, filename = await read_template(pdf)
+    kind, original, source, filename = await read_template(pdf, reference_pdf)
     try:
         blank, thumbnail = await run_in_threadpool(clean_pdf, source, definition)
     except ValueError as error:
@@ -400,6 +446,8 @@ def save_report_defaults(
     if template is None:
         raise HTTPException(404, "Template not found")
     require_active(db, template)
+    if onlyoffice.native(template):
+        raise HTTPException(409, "Open this template to restore the field-box editor first")
     previous = versions.latest_revision(db, template)
     if payload.expected_revision_id != previous.id:
         raise HTTPException(
@@ -432,11 +480,18 @@ def save_report_defaults(
 @app.get("/api/templates/{template_id}/drafts/{draft_id}/pdf")
 @app.get("/api/templates/{template_id}/drafts/{draft_id}/download")
 async def download_draft_pdf(
-    template_id: str, draft_id: str, db: Session = Depends(get_db),
+    template_id: str, draft_id: str, request: Request, db: Session = Depends(get_db),
     output_format: Literal["pdf", "docx", "original"] = Query("pdf", alias="format"),
 ):
     template = template_or_404(db, template_id)
     draft = draft_or_404(db, template_id, draft_id)
+    if onlyoffice.native(template):
+        kind = "docx" if output_format == "original" else output_format
+        saved = db.get(WordDocument, draft.id)
+        if saved is None:
+            raise HTTPException(404, "Saved Word report not found")
+        payload = saved.payload if kind == "docx" else await run_in_threadpool(docx_to_pdf, saved.payload)
+        return document_response(payload, kind, draft.title)
     revision = versions.for_draft(db, template, draft)
     report = TemplateReport.model_validate(draft.form)
     images = {
@@ -504,6 +559,7 @@ async def edit_template(
     reviewed: bool = Form(False),
     expected_revision_id: str = Form(...),
     pdf: UploadFile | None = File(None),
+    reference_pdf: UploadFile | None = File(None),
     db: Session = Depends(get_db),
 ):
     template = db.scalar(
@@ -512,6 +568,8 @@ async def edit_template(
     if template is None:
         raise HTTPException(404, "Template not found")
     require_active(db, template)
+    if onlyoffice.native(template):
+        raise HTTPException(409, "Restore this Word template to the field-box editor first")
     previous = versions.latest_revision(db, template)
     if previous.id != expected_revision_id:
         raise HTTPException(
@@ -520,13 +578,15 @@ async def edit_template(
     definition = parse(TemplateDefinition, definition_json)
     if not definition.fields:
         raise HTTPException(422, "Review the template before saving")
-    uploaded_source = await read_template(pdf) if pdf else None
+    if reference_pdf is not None and pdf is None:
+        raise HTTPException(422, "Upload the original Word document with its reference PDF")
+    uploaded_source = await read_template(pdf, reference_pdf) if pdf else None
     source = uploaded_source[2] if uploaded_source else template.source_pdf
     try:
         blank, thumbnail = await run_in_threadpool(clean_pdf, source, definition)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
-    # Pin every legacy draft before changing the current template.
+    # Pin every existing draft before changing the current template.
     for draft in db.scalars(select(Draft).where(Draft.template_id == template.id)):
         versions.for_draft(db, template, draft)
     for field in definition.fields:
@@ -541,6 +601,43 @@ async def edit_template(
     if uploaded_source:
         kind, original, _, filename = uploaded_source
         retain_source(db, revision, kind, original, filename)
+    db.commit()
+    return revision_detail(db, template, revision)
+
+
+@app.post("/api/templates/{template_id}/restore-overlay")
+async def restore_word_overlay(template_id: str, db: Session = Depends(get_db)):
+    """Keep the native trial's original bytes/revision and create a field-box revision."""
+    template = db.scalar(select(Template).where(Template.id == template_id).with_for_update())
+    if template is None:
+        raise HTTPException(404, "Template not found")
+    if not onlyoffice.native(template):
+        return revision_detail(db, template, versions.latest_revision(db, template))
+    require_active(db, template)
+    # Do not silently flatten or overwrite a user's native draft edits.
+    if db.scalar(select(Draft.id).where(Draft.template_id == template_id).limit(1)):
+        raise HTTPException(409, "This Word template has saved Word drafts. Download/back up those reports before migrating; no records were changed.")
+    saved = db.get(WordDocument, template.id)
+    if saved is None:
+        raise HTTPException(404, "Original Word document not found")
+    try:
+        source = await run_in_threadpool(docx_to_pdf, saved.payload)
+        detected = await run_in_threadpool(analyze_pdf, source)
+        definition = TemplateDefinition.model_validate(detected["definition"])
+        blank, thumbnail = await run_in_threadpool(clean_pdf, source, definition)
+    except ConverterUnavailable as error:
+        raise HTTPException(503, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    previous = versions.latest_revision(db, template)
+    template.source_pdf, template.blank_pdf, template.thumbnail = source, blank, thumbnail
+    template.definition = definition.model_dump(mode="json")
+    revision = versions.snapshot(db, template, previous.number + 1)
+    source_row = db.get(TemplateSource, revision.id)
+    if source_row:
+        source_row.payload = saved.payload
+    else:
+        retain_source(db, revision, "docx", saved.payload, "template.docx")
     db.commit()
     return revision_detail(db, template, revision)
 
@@ -572,6 +669,7 @@ def delete_archived_template(template_id: str, confirmed: bool = False, db: Sess
     if not confirmed or not db.get(TemplateArchive, template_id):
         raise HTTPException(409, "Archive the template and confirm permanent deletion first. Back up reports before deleting.")
     draft_ids = select(Draft.id).where(Draft.template_id == template_id)
+    db.execute(delete(WordDocument).where(WordDocument.template_id == template_id))
     db.execute(delete(DraftImage).where(DraftImage.draft_id.in_(draft_ids)))
     db.execute(delete(DraftRevision).where(DraftRevision.draft_id.in_(draft_ids)))
     db.execute(delete(DraftDeletion).where(DraftDeletion.draft_id.in_(draft_ids)))
@@ -587,6 +685,8 @@ def delete_archived_template(template_id: str, confirmed: bool = False, db: Sess
 
 @app.get("/api/templates/{template_id}/source")
 def source(template_id: str, db: Session = Depends(get_db)):
+    if onlyoffice.native(template_or_404(db, template_id)):
+        raise HTTPException(409, "Open the template to restore its overlay background first")
     return Response(
         template_or_404(db, template_id).source_pdf, media_type="application/pdf"
     )
@@ -626,6 +726,8 @@ def background(
     template_id: str, revision_id: str | None = None, db: Session = Depends(get_db)
 ):
     template = template_or_404(db, template_id)
+    if onlyoffice.native(template):
+        raise HTTPException(409, "Open the template to restore its overlay background first")
     revision = versions.resolve(db, template, revision_id)
     db.commit()
     return Response(revision.blank_pdf, media_type="application/pdf")
@@ -720,6 +822,8 @@ async def persist_draft(
     template_id, draft_id, report_json, images, image_fields, db, revision_id=None
 ):
     template = template_or_404(db, template_id)
+    if onlyoffice.native(template):
+        raise HTTPException(409, "Restore this template to the field-box editor first")
     existing = draft_or_404(db, template_id, draft_id) if draft_id else None
     if not existing:
         require_active(db, template)
@@ -832,6 +936,8 @@ async def render(
     output_format="pdf",
 ):
     template = template_or_404(db, template_id)
+    if onlyoffice.native(template):
+        raise HTTPException(409, "Restore this template to the field-box editor first")
     revision = versions.resolve(db, template, revision_id)
     definition = TemplateDefinition.model_validate(revision.definition)
     db.commit()

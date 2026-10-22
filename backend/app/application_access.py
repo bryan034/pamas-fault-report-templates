@@ -2,19 +2,15 @@
 
 import os
 import re
-from functools import lru_cache
-from secrets import compare_digest
 from typing import Literal
-from urllib.parse import urlsplit
-
-import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, field_validator
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.orm import Session
 
 from .deployment import is_cloud
-from .template_database import ApplicationUser, engine, get_db
+from .template_database import ApplicationUser, LoginSession, engine, get_db
+from . import google_auth
 
 
 def email(value: str) -> str:
@@ -29,86 +25,29 @@ def email(value: str) -> str:
 
 def protected() -> bool:
     mode = os.environ.get("TEMPLATE_ACCESS_MODE", "local")
-    if mode not in {"local", "cloudflare"}:
-        raise ValueError("TEMPLATE_ACCESS_MODE must be local or cloudflare")
-    return is_cloud() or mode == "cloudflare"
-
-
-def issuer() -> str:
-    domain = os.environ.get("ACCESS_TEAM_DOMAIN", "")
-    if not re.fullmatch(
-        r"[a-z0-9][a-z0-9-]*\.cloudflareaccess\.com", domain
-    ) or not re.fullmatch(r"[a-f0-9]{64}", os.environ.get("ACCESS_AUD", "")):
-        raise ValueError("Configure the Access team domain and application AUD")
-    return f"https://{domain}"
+    if mode not in {"local", "google"}:
+        raise ValueError("TEMPLATE_ACCESS_MODE must be local or google")
+    if is_cloud() and mode != "google":
+        raise ValueError("Cloud deployments require TEMPLATE_ACCESS_MODE=google")
+    return mode == "google"
 
 
 def validate_settings():
     if not protected():
         return
     email(os.environ.get("TEMPLATE_OWNER_EMAIL", ""))
-    if not is_cloud():
-        issuer()
-        origin = urlsplit(os.environ.get("TEMPLATE_PUBLIC_ORIGIN", ""))
-        if (
-            origin.scheme != "https"
-            or not origin.hostname
-            or origin.username
-            or origin.password
-            or origin.path
-            or origin.query
-            or origin.fragment
-        ):
-            raise ValueError(
-                "Configure TEMPLATE_PUBLIC_ORIGIN as an HTTPS origin without a path"
-            )
-
-
-@lru_cache(maxsize=4)
-def keys(url):
-    # The URL comes exclusively from validated configuration, never a JWT header.
-    return jwt.PyJWKClient(f"{url}/cdn-cgi/access/certs", lifespan=300, timeout=5)
+    google_auth.validate_settings()
 
 
 def identity(request: Request) -> dict:
     if not protected():
         return {"mode": "local", "email": None, "role": "editor"}
     validate_settings()
-    if is_cloud():
-        # Only the private Worker gateway may assert an identity in cloud mode.
-        expected = os.environ.get("TEMPLATE_SERVICE_TOKEN", "")
-        supplied = request.headers.get("X-Template-Service-Token", "")
-        if len(expected) < 32 or not compare_digest(
-            expected.encode(), supplied.encode()
-        ):
-            raise HTTPException(401, "Service authentication required")
-        asserted = request.headers.get("X-Template-User-Email", "")
-    else:
-        token = request.headers.get("Cf-Access-Jwt-Assertion", "")
-        if not token or len(token) > 16384:
-            raise HTTPException(401, "Cloudflare sign-in required")
-        try:
-            url = issuer()
-            key = keys(url).get_signing_key_from_jwt(token).key
-            claims = jwt.decode(
-                token,
-                key,
-                algorithms=["RS256"],
-                issuer=url,
-                audience=os.environ["ACCESS_AUD"],
-                options={"require": ["exp", "iat", "sub", "email", "iss", "aud"]},
-            )
-            asserted = claims["email"]
-        except jwt.PyJWKClientConnectionError as error:
-            raise HTTPException(
-                503, "Identity verification is temporarily unavailable"
-            ) from error
-        except (jwt.PyJWTError, ValueError, TypeError) as error:
-            raise HTTPException(401, "Cloudflare sign-in required") from error
-    try:
-        address = email(asserted)
-    except (ValueError, TypeError, AttributeError) as error:
-        raise HTTPException(401, "A verified user email is required") from error
+    address = google_auth.session_identity(request)
+    return {"mode": "google", "email": address, "role": role_for(address)}
+
+
+def role_for(address: str) -> str:
     if address == email(os.environ["TEMPLATE_OWNER_EMAIL"]):
         role = "owner"
     else:
@@ -118,7 +57,7 @@ def identity(request: Request) -> dict:
             role = grant.role if grant else None
         if role not in {"editor", "viewer"}:
             raise HTTPException(403, "Ask the application owner to grant access")
-    return {"mode": "cloudflare", "email": address, "role": role}
+    return role
 
 
 def owner(request: Request):
@@ -186,4 +125,5 @@ def revoke(address: str, user=Depends(owner), db: Session = Depends(get_db)):
     row = db.get(ApplicationUser, address.lower())
     if row:
         db.delete(row)
-        db.commit()
+    db.execute(delete(LoginSession).where(LoginSession.email == address.lower()))
+    db.commit()

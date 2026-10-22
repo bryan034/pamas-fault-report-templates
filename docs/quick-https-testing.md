@@ -39,8 +39,9 @@ the app's separate Owner/Editor/Viewer roles. This launcher requires the
 existing no-login local application mode and never disables configured
 authentication. Every approved tester can edit/delete your existing testing
 templates and reports. Manage access remains disabled in local mode. Use the
-separate named-Tunnel/Access workflow if you need the configured application
-roles, or implement and verify an appropriate identity integration separately.
+separate [application Google login](google-sign-in.md) workflow if you need
+configured roles. It works directly on localhost without a tunnel. For remote
+devices use the named-Tunnel setup with a registered HTTPS callback.
 
 ## Start
 

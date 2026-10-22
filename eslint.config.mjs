@@ -13,9 +13,20 @@ const eslintConfig = defineConfig([
     "build/**",
     "**/.wrangler/**",
     "next-env.d.ts",
+    "dist/**",
+    ".vinext/**",
+    ".sites-runtime/**",
+    "backend/.venv/**",
+    "backend/.uv-cache/**",
+    "public/ocr/**",
+    "public/pdf.worker.min.mjs",
+    ".playwright/**",
+    "test-results/**",
+    "playwright-report/**",
+    "vendor/**",
   ]),
   {
-    files: ["components/ui/**/*.{ts,tsx}", "hooks/use-mobile.ts"],
+    files: ["components/ui/**/*.{ts,tsx}"],
     rules: {
       // These files are vendored verbatim from shadcn@4.17.0. Keep the
       // registry source intact while applying the stricter rules to Site code.

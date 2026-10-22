@@ -172,6 +172,47 @@ def test_word_analyze_save_revision_and_original_retention(api, monkeypatch):
     assert api.get(base + "/original").status_code == 404
 
 
+def test_word_reference_pdf_preserves_exact_pages_and_original(api, monkeypatch):
+    original, reference = sample_word(), sample_pdf()
+    def conversion_must_not_run(payload):
+        raise AssertionError("The reference layout must bypass Word reflow")
+    monkeypatch.setattr(template_main, "docx_to_pdf", conversion_must_not_run)
+    files = {"pdf": ("job.docx", original, DOCX_MIME),
+             "reference_pdf": ("Word export.pdf", reference, "application/pdf")}
+    analyzed = api.post("/api/templates/analyze", files=files)
+    assert analyzed.status_code == 200, analyzed.text
+    assert len(analyzed.json()["definition"]["pages"]) == 2
+    import base64
+    assert base64.b64decode(analyzed.json()["render_pdf"]) == reference
+    data = {"title": "Exact Word layout", "definition_json": definition().model_dump_json()}
+    reviewed = api.post("/api/templates/review", files=files, data=data)
+    assert reviewed.status_code == 200, reviewed.text
+    assert len(PdfReader(BytesIO(reviewed.content)).pages) == 2
+    saved = api.post("/api/templates", files=files, data=data)
+    assert saved.status_code == 200, saved.text
+    base = "/api/templates/" + saved.json()["id"]
+    assert api.get(base + "/source").content == reference
+    assert api.get(base + "/original").content == original
+    assert len(PdfReader(BytesIO(api.get(base + "/background").content)).pages) == 2
+    updated = api.put(base, files=files, data={**data, "expected_revision_id": saved.json()["revision_id"]})
+    assert updated.status_code == 200, updated.text
+    assert api.get(base + "/original").content == original
+    generated = api.post(base + "/generate", data={"report_json": '{"title":"Exact layout report"}'})
+    assert generated.status_code == 200, generated.text
+    assert len(PdfReader(BytesIO(generated.content)).pages) == 2
+
+
+def test_reference_pdf_rejects_invalid_or_non_word_pairings(api):
+    data = {"title": "Invalid pairing", "definition_json": definition().model_dump_json()}
+    for files, status in [
+        ({"pdf": ("job.pdf", sample_pdf(), "application/pdf"), "reference_pdf": ("other.pdf", sample_pdf(), "application/pdf")}, 422),
+        ({"pdf": ("job.docx", sample_word(), DOCX_MIME), "reference_pdf": ("bad.pdf", b"not a pdf", "application/pdf")}, 415),
+        ({"pdf": ("bad.docx", b"not a docx", DOCX_MIME), "reference_pdf": ("layout.pdf", sample_pdf(), "application/pdf")}, 422),
+    ]:
+        result = api.post("/api/templates", files=files, data=data)
+        assert result.status_code == status, result.text
+
+
 def test_pdf_to_word_has_native_text_styling_and_page_geometry(api):
     base = create_shared(api)
     form = {

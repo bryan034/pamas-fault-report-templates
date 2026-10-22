@@ -1,52 +1,30 @@
-"""Offline signed-identity tests. No Cloudflare credentials or real saved data."""
+"""Application session and authorization tests; no real credentials or saved data."""
 
-import time
 import json
-from types import SimpleNamespace
-
-import jwt
+from datetime import timedelta
 import pytest
-from cryptography.hazmat.primitives.asymmetric import rsa
+from sqlalchemy.orm import Session
 
 from app import application_access as access
+from app.google_auth import digest
+from app.template_database import LoginSession, engine, now
 from test_templates import sample_pdf, definition
 
 
 @pytest.fixture
-def signing():
-    return rsa.generate_private_key(public_exponent=65537, key_size=2048)
-
-
-@pytest.fixture
-def secured(api, monkeypatch, signing):
-    monkeypatch.setenv("TEMPLATE_ACCESS_MODE", "cloudflare")
+def secured(api, monkeypatch):
+    monkeypatch.setenv("TEMPLATE_ACCESS_MODE", "google")
     monkeypatch.setenv("TEMPLATE_OWNER_EMAIL", "owner@example.com")
-    monkeypatch.setenv("ACCESS_TEAM_DOMAIN", "test-team.cloudflareaccess.com")
-    monkeypatch.setenv("ACCESS_AUD", "a" * 64)
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test.apps.googleusercontent.com")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "unit-test-secret")
     monkeypatch.setenv("TEMPLATE_PUBLIC_ORIGIN", "https://reports.example.com")
-    monkeypatch.setattr(
-        access,
-        "keys",
-        lambda url: SimpleNamespace(
-            get_signing_key_from_jwt=lambda token: SimpleNamespace(
-                key=signing.public_key()
-            )
-        ),
-    )
-
     def headers(address="owner@example.com", **overrides):
-        claims = {
-            "sub": "test-user",
-            "email": address,
-            "iat": int(time.time()),
-            "exp": int(time.time()) + 300,
-            "iss": access.issuer(),
-            "aud": "a" * 64,
-            **overrides,
-        }
-        return {
-            "Cf-Access-Jwt-Assertion": jwt.encode(claims, signing, algorithm="RS256")
-        }
+        token = "unit-test-session-" + address
+        with Session(engine()) as db:
+            db.merge(LoginSession(token_hash=digest(token), subject="subject-" + address,
+                                  email=address, expires_at=now() + timedelta(hours=1)))
+            db.commit()
+        return {"Cookie": "report_session=" + token, "Origin": "https://reports.example.com"}
 
     return api, headers
 
@@ -88,39 +66,20 @@ def test_missing_or_forged_identity_is_rejected(secured):
     )
 
 
-@pytest.mark.parametrize(
-    "claims",
-    [
-        {"aud": "wrong"},
-        {"iss": "https://evil.test"},
-        {"exp": 1},
-        {"email": ""},
-        {"sub": None},
-        {"iat": None},
-        {"exp": None},
-    ],
-)
-def test_invalid_claims(secured, claims):
+def test_expired_session(secured):
     api, headers = secured
-    assert api.get("/api/templates", headers=headers(**claims)).status_code == 401
+    supplied = headers()
+    with Session(engine()) as db:
+        row = db.get(LoginSession, digest("unit-test-session-owner@example.com"))
+        row.expires_at = now() - timedelta(seconds=1)
+        db.commit()
+    assert api.get("/api/templates", headers=supplied).status_code == 401
 
 
-def test_wrong_signature(secured):
+def test_random_cookie_cannot_impersonate_owner(secured):
     api, headers = secured
-    claims = jwt.decode(
-        headers()["Cf-Access-Jwt-Assertion"], options={"verify_signature": False}
-    )
-    forged = jwt.encode(
-        claims,
-        rsa.generate_private_key(public_exponent=65537, key_size=2048),
-        algorithm="RS256",
-    )
-    assert (
-        api.get(
-            "/api/templates", headers={"Cf-Access-Jwt-Assertion": forged}
-        ).status_code
-        == 401
-    )
+    headers()
+    assert api.get("/api/templates", headers={"Cookie": "report_session=owner@example.com"}).status_code == 401
 
 
 def test_owner_grants_updates_and_revokes(secured):
@@ -245,8 +204,8 @@ def test_viewer_cannot_read_recently_deleted(secured):
     "variable,value",
     [
         ("TEMPLATE_OWNER_EMAIL", ""),
-        ("ACCESS_AUD", ""),
-        ("ACCESS_TEAM_DOMAIN", "evil.test"),
+        ("GOOGLE_CLIENT_ID", ""),
+        ("GOOGLE_CLIENT_SECRET", ""),
         ("TEMPLATE_PUBLIC_ORIGIN", "http://reports.example.com"),
         ("TEMPLATE_PUBLIC_ORIGIN", "https://reports.example.com/path"),
         ("TEMPLATE_ACCESS_MODE", "typo"),
@@ -258,7 +217,8 @@ def test_settings_fail_closed(secured, monkeypatch, variable, value):
         access.validate_settings()
 
 
-def test_cloud_identity_requires_private_gateway(api, monkeypatch):
+def test_cloud_identity_requires_private_gateway_and_session(secured, monkeypatch):
+    api, headers = secured
     monkeypatch.setenv("TEMPLATE_ENVIRONMENT", "production")
     monkeypatch.setenv("TEMPLATE_OWNER_EMAIL", "owner@example.com")
     monkeypatch.setenv("TEMPLATE_SERVICE_TOKEN", "s" * 40)
@@ -273,7 +233,8 @@ def test_cloud_identity_requires_private_gateway(api, monkeypatch):
     response = api.get(
         "/api/access/me", headers={**forged, "X-Template-Service-Token": "s" * 40}
     )
-    assert response.status_code == 200
+    assert response.status_code == 401
+    response = api.get("/api/access/me", headers={**headers(), "X-Template-Service-Token": "s" * 40})
     assert response.json()["role"] == "owner"
     assert response.headers["cache-control"] == "private, no-store"
 

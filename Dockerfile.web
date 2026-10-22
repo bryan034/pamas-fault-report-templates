@@ -1,9 +1,17 @@
-FROM node:22-bookworm-slim
+FROM node:22-bookworm-slim AS source
 
 WORKDIR /web
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY . .
+
+# Local Compose uses mounted source and Vite HMR, not a prebuilt bundle.
+FROM source AS development
+EXPOSE 8787
+CMD ["sh", "-c", "node scripts/prepare-ocr-assets.mjs && exec node node_modules/vinext/dist/cli.js dev --host 0.0.0.0 --port 8787"]
+
+# Retain the old built-Workers preview mode (still local Wrangler, not cloud hosting).
+FROM source AS built-preview
 RUN npm run build
 
 EXPOSE 8787

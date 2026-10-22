@@ -124,6 +124,48 @@ def test_analysis_identifies_boundaries_and_preserves_caption():
     assert len(result["definition"]["pages"]) == 2
 
 
+@pytest.mark.parametrize("background", ["white", "image", "blank"])
+def test_detected_fields_have_attached_covers_for_white_or_image_backgrounds(background):
+    from reportlab.lib.utils import ImageReader
+
+    output = BytesIO()
+    pdf = canvas.Canvas(output, pagesize=(400, 500))
+    if background == "image":
+        pdf.drawImage(ImageReader(Image.new("RGB", (180, 60), "navy")), 20, 350, 180, 60)
+    pdf.rect(20, 350, 180, 60)
+    if background == "white":
+        pdf.setFont("Helvetica", 12)
+        pdf.drawString(30, 375, "Existing reading")
+    pdf.showPage()
+    pdf.save()
+    raw = output.getvalue()
+    detected = TemplateDefinition.model_validate(analyze_pdf(raw)["definition"])
+    assert detected.fields
+    covers = {area.id: area for area in detected.clear_areas}
+    for field in detected.fields:
+        assert field.id in covers
+        cover = covers[field.id]
+        assert cover.color == "#ffffff"
+        for key in ("page", "x", "y", "width", "height"):
+            assert getattr(cover, key) == getattr(field, key)
+    blank, _ = clean_pdf(raw, detected)
+    with pdfium.PdfDocument(blank) as doc:
+        image = doc[0].render(scale=1).to_pil().convert("RGB")
+        assert image.getpixel((80, 120)) == (255, 255, 255)
+        # Original outer border is outside the inset cover.
+        assert max(image.getpixel((20, 120))) < 200
+
+
+def test_cover_background_check_preserves_coloured_fills():
+    from types import SimpleNamespace
+    from app.template_pdf import _needs_cover
+
+    rect = dict(x0=0, top=0, x1=100, bottom=100, fill=True)
+    for colour, expected in [((1,1,1), True), ((1,.6,0), False), ((0,0,0,0), True), (0.4, False), (None, False)]:
+        page = SimpleNamespace(images=[], rects=[{**rect, "non_stroking_color": colour}])
+        assert _needs_cover(page, (10,10,90,90)) is expected
+
+
 def test_interactive_fields_and_rounded_outlines_are_detected():
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=(400, 500))
@@ -140,6 +182,26 @@ def test_interactive_fields_and_rounded_outlines_are_detected():
     assert company["role"] == "company"
     assert company["suggested_value"] == "Old Co"
     assert any(field["label"] == "Description" for field in detected["fields"])
+
+
+def test_double_borders_and_table_detection_do_not_stack_fields():
+    buffer = BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=(400, 500))
+    # Coordinates deliberately straddle the old two-point rounding buckets.
+    for x, y, width, height in [(21, 360, 180, 40), (21.25, 360.25, 179.5, 39.5),
+                                  (201, 360, 170, 40), (21, 310, 350, 50)]:
+        pdf.rect(x, y, width, height)
+    pdf.setFont("Helvetica", 12)
+    pdf.drawString(210, 375, "REPAIR AS SOON AS POSSIBLE")
+    pdf.showPage()
+    pdf.save()
+    result = analyze_pdf(buffer.getvalue())["definition"]
+    fields = result["fields"]
+    assert len(fields) == 3
+    for i, a in enumerate(fields):
+        for b in fields[i + 1:]:
+            assert not (min(a["x"] + a["width"], b["x"] + b["width"]) > max(a["x"], b["x"])
+                        and min(a["y"] + a["height"], b["y"] + b["height"]) > max(a["y"], b["y"]))
 
 
 def test_scanned_pages_are_flagged_and_label_only_table_cells_are_preserved():

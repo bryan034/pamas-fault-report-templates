@@ -308,7 +308,7 @@ test("template builder errors, properties, clearing, dropdowns, formulas, and re
     .filter({ hasText: /^Company/ })
     .click();
   await page.getByLabel("Font", { exact: true }).selectOption("Helvetica");
-  await page.getByLabel("Font size", { exact: true }).fill("18");
+  await page.getByLabel("Font size", { exact: true }).selectOption("18");
   await page.getByLabel("Font color", { exact: true }).evaluate((node) => {
     Object.getOwnPropertyDescriptor(
       HTMLInputElement.prototype,

@@ -20,57 +20,31 @@ export function templateDefaultText(field: TemplateField): string {
 export default function TemplateDefaultPreview({
   field,
   page,
+  showLabel = false,
+  onFit,
 }: {
   field: TemplateField;
+  showLabel?: boolean;
+  onFit?: (field: TemplateField, width: number, height: number) => void;
   page: { width: number; height: number };
 }) {
-  const target = useRef<SVGTextElement>(null);
-  const value = templateDefaultText(field);
+  const value = showLabel ? field.label : templateDefaultText(field);
   const lines = value.split("\n");
   const width = field.width * page.width,
     height = field.height * page.height;
-  const padding = Math.min(2, width * 0.04, height * 0.08);
-  const anchor =
-    field.alignment === "left"
-      ? "start"
-      : field.alignment === "right"
-        ? "end"
-        : "middle";
-  const x =
-    anchor === "start"
-      ? padding
-      : anchor === "end"
-        ? width - padding
-        : width / 2;
+  const text = useRef<SVGTextElement>(null);
+  const image = field.kind === "image";
+  const fontSize = image ? Math.min(field.font_size, height * .65) : field.font_size;
   useLayoutEffect(() => {
-    const text = target.current;
-    if (!text) return;
-    let size = Math.min(
-      field.font_size,
-      (height - padding * 2) / (lines.length * 1.2),
-    );
-    text.setAttribute("font-size", String(size));
-    const spans = [...text.querySelectorAll("tspan")];
-    const longest = Math.max(
-      0,
-      ...spans.map((span) => span.getComputedTextLength()),
-    );
-    if (longest > width - padding * 2) size *= (width - padding * 2) / longest;
-    size = Math.max(0.1, size);
-    text.setAttribute("font-size", String(size));
-    const firstBaseline = (height - lines.length * size * 1.2) / 2 + size;
-    spans.forEach((span, index) =>
-      span.setAttribute("y", String(firstBaseline + index * size * 1.2)),
-    );
-  }, [
-    value,
-    field.font,
-    field.font_size,
-    width,
-    height,
-    padding,
-    lines.length,
-  ]);
+    const node = text.current;
+    if (!node || !value) return;
+    node.removeAttribute("transform");
+    const bounds = node.getBBox();
+    // Center the actual glyph bounds, giving equal space on opposite sides.
+    node.setAttribute("transform", `translate(${width / 2 - bounds.x - bounds.width / 2} ${height / 2 - bounds.y - bounds.height / 2})`);
+    if (!image) onFit?.(field, bounds.width + 2,
+      Math.max(bounds.height, lines.length * fontSize * 1.15) + 2);
+  }, [field, value, width, height, fontSize, image, lines.length, onFit]);
   if (!value) return null;
   return (
     <svg
@@ -80,15 +54,16 @@ export default function TemplateDefaultPreview({
       height={field.height}
       viewBox={`0 0 ${width} ${height}`}
       preserveAspectRatio="none"
-      overflow="hidden"
+      overflow="visible"
       pointerEvents="none"
-      data-template-default={field.id}
-      aria-label={`Default value for ${field.label}`}
+      data-template-default={showLabel ? undefined : field.id}
+      data-template-label={showLabel ? field.id : undefined}
+      aria-label={`${showLabel ? "Field label" : "Default value"} for ${field.label}`}
     >
       <text
-        ref={target}
+        ref={text}
         fill={field.color}
-        textAnchor={anchor}
+        textAnchor="middle"
         fontFamily={
           field.font.startsWith("Times")
             ? "Times New Roman"
@@ -97,10 +72,10 @@ export default function TemplateDefaultPreview({
               : "Courier New"
         }
         fontWeight={field.font.includes("Bold") ? "bold" : "normal"}
-        fontSize={field.font_size}
+        fontSize={fontSize}
       >
         {lines.map((line, index) => (
-          <tspan key={index} x={x}>
+          <tspan key={index} x={width / 2} y={fontSize + index * fontSize * 1.15}>
             {line}
           </tspan>
         ))}

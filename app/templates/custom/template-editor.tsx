@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type SetStateAction } from "react";
 import {
   ArrowLeft,
   Download,
@@ -8,6 +8,8 @@ import {
   RotateCcw,
   Trash2,
   UploadCloud,
+  Undo2,
+  Redo2,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -48,10 +50,12 @@ import {
   templateApiBase,
   templateRequest,
 } from "@/lib/template-api";
-import { readPhotos } from "@/lib/template-image-ocr";
+import { nearbyBxFields, type BxLabel } from "@/lib/bx-extraction";
+import { readBxPhoto, readPhotos } from "@/lib/template-image-ocr";
 import { extractQuotedReading } from "@/lib/template-ocr";
 import { extractedValue, fieldsInPageOrder, nextReportField } from "@/lib/template-editing";
 import { calculationProblems } from "@/lib/template-calculations";
+import { useEditHistory } from "@/lib/use-edit-history";
 import { createId } from "@/lib/create-id";
 
 export default function TemplateEditor({
@@ -70,17 +74,42 @@ export default function TemplateEditor({
     error: string;
   };
 }) {
-  const [template, setTemplate] = useState<TemplateDetail | null>(
-      sandbox?.template || null,
-    ),
-    [report, setReport] = useState<TemplateReport>(() => emptyReport(sandbox?.template.definition));
-  const [images, setImages] = useState<Record<string, File>>({}),
-    [imageUrls, setImageUrls] = useState<Record<string, string>>({});
+  const [template, setTemplate] = useState<TemplateDetail | null>(sandbox?.template || null);
+  const history = useEditHistory({
+    report: emptyReport(sandbox?.template.definition),
+    images: {} as Record<string, File>,
+    configuration: reportConfiguration(emptyReport(sandbox?.template.definition)),
+  }, 100);
+  const { report, images } = history.value;
+  const setHistory = history.set;
+  const resetHistory = history.reset;
+  const dragHistory = useRef({ active: false, recorded: false });
+  const setReport = useCallback((update: SetStateAction<TemplateReport>, record = true) => {
+    const drag = dragHistory.current;
+    const shouldRecord = record && (!drag.active || !drag.recorded);
+    setHistory(current => {
+      const next = typeof update === "function" ? update(current.report) : update;
+      if (next === current.report) return current;
+      // Automatic font-driven growth is rendered/persisted, but only user edits
+      // to geometry or font sizes should prompt to change future defaults.
+      const configuration = !record ? current.configuration : {
+        layout: next.layout !== current.report.layout ? next.layout : current.configuration.layout,
+        font_sizes: next.styles !== current.report.styles
+          ? reportConfiguration(next).font_sizes : current.configuration.font_sizes,
+      };
+      return { ...current, report: next, configuration };
+    }, shouldRecord);
+    if (record && drag.active) drag.recorded = true;
+  }, [setHistory]);
+  const setImages = (update: SetStateAction<Record<string, File>>) => {
+    setHistory(current => ({ ...current, images: typeof update === "function" ? update(current.images) : update }));
+  };
+  const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
   const [companies, setCompanies] = useState<string[]>([]),
     [activeDraft, setActiveDraft] = useState(draftId);
   const [loading, setLoading] = useState(!sandbox),
     [loadError, setLoadError] = useState(""),
-    [notice, setNotice] = useState("");
+    [notice, setNotice] = useState<string | { message: string; fields: string[] }>("");
   const [preview, setPreview] = useState<FieldLayers | null>(null),
     [previewError, setPreviewError] = useState(""),
     [previewBusy, setPreviewBusy] = useState(false);
@@ -102,6 +131,7 @@ export default function TemplateEditor({
   const [selectedField, setSelectedField] = useState<string | null>(null);
   const [ocrNotes, setOcrNotes] = useState<Record<string, string>>({});
   const imageVersions = useRef<Record<string, number>>({});
+  const bxMode = useRef<Record<string, boolean>>({});
   const valueEdits = useRef<Record<string, number>>({});
   const [titleRequired, setTitleRequired] = useState(false);
   const titleInput = useRef<HTMLInputElement>(null);
@@ -171,14 +201,13 @@ export default function TemplateEditor({
             }),
           );
           if (cancelled) return;
-          setReport({ ...emptyReport(), ...draft.form });
+          resetHistory({ report: { ...emptyReport(), ...draft.form }, images: files, configuration: reportConfiguration({ ...emptyReport(), ...draft.form }) });
           configurationBaseline.current = JSON.stringify(
             reportConfiguration({ ...emptyReport(), ...draft.form }),
           );
-          setImages(files);
           setActiveDraft(draft.id);
         } else {
-          setReport(emptyReport(t.definition));
+          resetHistory({ report: emptyReport(t.definition), images: {}, configuration: reportConfiguration(emptyReport(t.definition)) });
         }
         if (!cancelled) setLoading(false);
       } catch (cause) {
@@ -282,6 +311,12 @@ export default function TemplateEditor({
         const data = (await response.json()) as FieldLayers;
         if (!cancelled) {
           setPreview(data);
+          if (data.layout && Object.keys(data.layout).length) {
+            setReport(current => {
+              const layout = { ...current.layout, ...data.layout };
+              return JSON.stringify(layout) === JSON.stringify(current.layout) ? current : { ...current, layout };
+            }, false);
+          }
           setPreviewBusy(false);
         }
       } catch (cause) {
@@ -406,6 +441,7 @@ export default function TemplateEditor({
       ) || [];
     const items = extractedItems.filter((item) => item.image_field === fieldId);
     if (!rules.length && !items.length) return;
+    bxMode.current[fieldId] = false;
     const regions = [
       ...rules.map((rule) => rule.region),
       ...items.map((item) => item.region),
@@ -470,6 +506,53 @@ export default function TemplateEditor({
     setOcrNotes((current) => ({ ...current, [fieldId]: notes.join("\n") }));
     setNotice("Image values extracted. Review and confirm before downloading.");
   };
+  const runBxOcr = async (fieldId: string) => {
+    const file = images[fieldId];
+    if (!template || !file || imageBusy) return;
+    const targets = nearbyBxFields(template.definition, fieldId, report.layout);
+    if (!Object.keys(targets.fields).length) {
+      setNotice("No unambiguous BX1, BX2 or BX3 fields beside this image on the same page. Label and position the BX fields, then try again.");
+      return;
+    }
+    const version = (imageVersions.current[fieldId] || 0) + 1;
+    imageVersions.current[fieldId] = version;
+    const targetEdits = { ...valueEdits.current };
+    setImageBusy(fieldId);
+    try {
+      const result = await readBxPhoto(file);
+      if (imageVersions.current[fieldId] !== version) return;
+      const updates: Record<string, string> = {}, notes: string[] = [];
+      for (const label of ["BX1", "BX2", "BX3"] as BxLabel[]) {
+        const target = targets.fields[label], reading = result.values[label];
+        if (!target) {
+          notes.push(`${label}: no unique nearby field on this page`);
+        } else if (result.ambiguous.includes(label)) {
+          notes.push(`${label}: conflicting readings — enter manually`);
+        } else if (reading === undefined) {
+          notes.push(`${label}: not found clearly — existing value kept`);
+        } else if ((valueEdits.current[target.id] || 0) !== (targetEdits[target.id] || 0)) {
+          notes.push(`${label}: field edited while reading — your value kept`);
+        } else {
+          updates[target.id] = reading;
+          notes.push(`${label}: ${reading} → ${target.label}`);
+        }
+      }
+      setReport(current => ({...current, values: {...current.values,
+        ...Object.fromEntries(Object.entries(updates).filter(([id]) =>
+          (valueEdits.current[id] || 0) === (targetEdits[id] || 0)))},
+        readings_confirmed: {...current.readings_confirmed, [fieldId]: false}}));
+      bxMode.current[fieldId] = true;
+      setOcrNotes(current => ({...current, [fieldId]: notes.join("\n")}));
+      setNotice(Object.keys(updates).length
+        ? "BX values extracted. Review the temperatures against your photo."
+        : "No BX values could be filled safely. Existing values were kept; check the image and field labels.");
+    } catch (cause) {
+      if (imageVersions.current[fieldId] === version)
+        setNotice(cause instanceof Error ? cause.message : "Could not read BX values. Try a clearer photo.");
+    } finally {
+      setImageBusy("");
+    }
+  };
   const dropExtraction = (id: string, field: TemplateField) => {
     const item = extractedItems.find((item) => item.id === id);
     if (!item) return;
@@ -511,6 +594,8 @@ export default function TemplateEditor({
       const prepared = await prepareImage(file);
       if (imageVersions.current[fieldId] !== version) return;
       setImages((current) => ({ ...current, [fieldId]: prepared }));
+      bxMode.current[fieldId] = false;
+      setOcrNotes(current => ({...current, [fieldId]: ""}));
       setReport((current) => {
         const next = { ...current.values };
         for (const mapping of template?.definition.ocr_mappings || [])
@@ -529,7 +614,7 @@ export default function TemplateEditor({
             [fieldId]: false,
           },
         };
-      });
+      }, false);
       await runOcr(fieldId, prepared, version);
     } catch (cause) {
       setNotice(
@@ -570,7 +655,7 @@ export default function TemplateEditor({
         (rect) => rect.image_field !== fieldId,
       ),
       readings_confirmed: { ...current.readings_confirmed, [fieldId]: false },
-    }));
+    }), false);
     setOcrNotes((current) => {
       const next = { ...current };
       delete next[fieldId];
@@ -579,9 +664,7 @@ export default function TemplateEditor({
   };
   const save = async (publishConfiguration = false) => {
     if (!report.title.trim()) {
-      setNotice(
-        `Enter a report title to save. Still blank: ${missing.join(", ")}`,
-      );
+      setNotice({ message: "Enter a report title to save. Still blank:", fields: missing });
       return;
     }
     setConfigurationDialog(false);
@@ -637,11 +720,11 @@ export default function TemplateEditor({
         }
       }
       configurationBaseline.current = JSON.stringify(
-        reportConfiguration(report),
+        history.value.configuration,
       );
       setNotice(
         missing.length
-          ? `Draft saved. Still blank: ${missing.join(", ")}`
+          ? { message: "Draft saved. Still blank:", fields: missing }
           : "Draft saved. All required fields are filled.",
       );
     } catch (cause) {
@@ -676,14 +759,36 @@ export default function TemplateEditor({
   const reset = () => {
     for (const key of Object.keys(images))
       imageVersions.current[key] = (imageVersions.current[key] || 0) + 1;
-    setReport(emptyReport(template?.definition));
-    setImages({});
+    setHistory({ report: emptyReport(template?.definition), images: {}, configuration: reportConfiguration(emptyReport(template?.definition)) });
     setOcrNotes({});
     setResetOpen(false);
     setNotice(
       "Report fields reset. The saved draft is unchanged until you save.",
     );
   };
+
+  const stepHistory = (redo = false) => {
+    if (loading || saving || imageBusy || cropImage || dragging) return;
+    for (const field of template?.definition.fields || []) {
+      imageVersions.current[field.id] = (imageVersions.current[field.id] || 0) + 1;
+      valueEdits.current[field.id] = (valueEdits.current[field.id] || 0) + 1;
+    }
+    setOcrNotes({});
+    if (redo) history.redo();
+    else history.undo();
+  };
+  useEffect(() => {
+    const key = (event: globalThis.KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.isComposing) return;
+      const key = event.key.toLowerCase();
+      if (key !== "z" && key !== "y") return;
+      if (loading || saving || imageBusy || cropImage || dragging) return;
+      event.preventDefault();
+      stepHistory(key === "y" || event.shiftKey);
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  });
 
   if (loadError)
     return (
@@ -740,6 +845,12 @@ export default function TemplateEditor({
           </p>
         </div>
         <div className="topbar-actions">
+          <Button data-report-history variant="outline" disabled={!history.canUndo || loading || saving || !!imageBusy || !!cropImage || dragging} onClick={() => stepHistory()} title="Undo (Ctrl/Cmd+Z)">
+            <Undo2 size={16} /> Undo
+          </Button>
+          <Button data-report-history variant="outline" disabled={!history.canRedo || loading || saving || !!imageBusy || !!cropImage || dragging} onClick={() => stepHistory(true)} title="Redo (Ctrl/Cmd+Shift+Z or Ctrl+Y)">
+            <Redo2 size={16} /> Redo
+          </Button>
           {sandbox ? (
             <>
               <Button variant="outline" onClick={sandbox.onContinue}>
@@ -767,7 +878,7 @@ export default function TemplateEditor({
                     return;
                   }
                   if (
-                    JSON.stringify(reportConfiguration(report)) !==
+                    JSON.stringify(history.value.configuration) !==
                     configurationBaseline.current
                   )
                     setConfigurationDialog(true);
@@ -849,7 +960,7 @@ export default function TemplateEditor({
                   (rule) => rule.image_field === field.id,
                 );
                 const hasReadings =
-                  mappings.length > 0 ||
+                  Boolean(ocrNotes[field.id]) || mappings.length > 0 ||
                   extractedItems.some((item) => item.image_field === field.id);
                 return (
                   <section
@@ -881,7 +992,7 @@ export default function TemplateEditor({
                           ? "Preparing image / reading labels…"
                           : hasReadings
                             ? "Reads your named image crops"
-                            : "Visual reference only"}
+                            : "Upload a photo, then extract BX values from anywhere in it"}
                       </p>
                       <label className="template-file-label">
                         <UploadCloud size={16} />{" "}
@@ -912,7 +1023,17 @@ export default function TemplateEditor({
                     {images[field.id] && (
                       <Button
                         size="sm"
+                        disabled={Boolean(imageBusy)}
+                        onClick={() => void runBxOcr(field.id)}
+                      >
+                        {imageBusy === field.id ? "Reading image…" : "Extract BX values from image"}
+                      </Button>
+                    )}
+                    {images[field.id] && (
+                      <Button
+                        size="sm"
                         variant="outline"
+                        disabled={Boolean(imageBusy)}
                         onClick={() =>
                           setCropImage({
                             fieldId: field.id,
@@ -963,6 +1084,10 @@ export default function TemplateEditor({
                           variant="outline"
                           disabled={Boolean(imageBusy)}
                           onClick={async () => {
+                            if (bxMode.current[field.id]) {
+                              await runBxOcr(field.id);
+                              return;
+                            }
                             const version =
                               (imageVersions.current[field.id] || 0) + 1;
                             imageVersions.current[field.id] = version;
@@ -1106,7 +1231,11 @@ export default function TemplateEditor({
             layers={preview}
             busy={previewBusy}
             error={previewError}
-            onDragState={setDragging}
+            onDragState={(active) => {
+              if (dragHistory.current.active !== active)
+                dragHistory.current = { active, recorded: false };
+              setDragging(active);
+            }}
             onImage={(id, file) => void attach(id, file)}
             onExtraction={dropExtraction}
             activeField={selectedField}
@@ -1128,7 +1257,18 @@ export default function TemplateEditor({
       />
       {notice && (
         <div className="feedback-toast" role="status" aria-live="polite">
-          {notice}
+          {typeof notice === "string" ? notice : (
+            <>
+              <p>{notice.message}</p>
+              <div className="missing-field-cards" role="list" aria-label="Blank fields">
+                {notice.fields.map((label, index) => (
+                  <div className="missing-field-card" role="listitem" key={`${index}-${label}`}>
+                    {label}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       )}
       <AlertDialog
@@ -1168,7 +1308,7 @@ export default function TemplateEditor({
             <AlertDialogTitle>Reset report?</AlertDialogTitle>
             <AlertDialogDescription>
               This clears the current fields, photos, annotations, and layout
-              changes. This action cannot be undone. Your saved draft changes
+              changes. You can undo this reset. Your saved draft changes
               only when you save again.
             </AlertDialogDescription>
           </AlertDialogHeader>

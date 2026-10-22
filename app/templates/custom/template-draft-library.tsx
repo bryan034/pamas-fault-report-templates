@@ -175,6 +175,8 @@ export default function TemplateDraftLibrary({
   };
   const download = async (kind: "background") => {
     try {
+      if (template?.editor_kind === "native-docx")
+        setTemplate(await templateJson<TemplateDetail>(`${base}/restore-overlay`, { method: "POST" }));
       const response = await templateRequest(`${base}/${kind}`);
       downloadBlob(
         await response.blob(),

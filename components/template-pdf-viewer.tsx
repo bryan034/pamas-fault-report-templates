@@ -78,7 +78,9 @@ export default function TemplatePdfViewer({
         GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
         const task = getDocument(
           typeof source === "string"
-            ? { url: source }
+            // PDF.js fetches URLs itself, outside our credentialed API helper.
+            // Local UI/API ports are different origins, so opt in to cookies.
+            ? { url: source, withCredentials: true }
             : { data: source.slice() },
         );
         loading = task;

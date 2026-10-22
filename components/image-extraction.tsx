@@ -310,16 +310,13 @@ export function SamplePhotoPicker({
   referenceFile?: File;
   onFile: (file: File) => void;
 }) {
-  const [url, setUrl] = useState("");
+  const image = useRef<HTMLImageElement>(null);
   const previewFile = file || referenceFile;
   useEffect(() => {
-    if (!previewFile) {
-      setUrl("");
-      return;
-    }
-    const next = URL.createObjectURL(previewFile);
-    setUrl(next);
-    return () => URL.revokeObjectURL(next);
+    if (!previewFile || !image.current) return;
+    const url = URL.createObjectURL(previewFile);
+    image.current.src = url;
+    return () => URL.revokeObjectURL(url);
   }, [previewFile]);
   return (
     <div className="sample-photo-picker">
@@ -342,10 +339,10 @@ export function SamplePhotoPicker({
           <span>{file ? file.name : "Choose image for value extraction"}</span>
         </span>
       </label>
-      {url && (
+      {previewFile && (
         <img
+          ref={image}
           className="sample-photo-thumbnail"
-          src={url}
           alt={
             file
               ? `Sample photo: ${file.name}`

@@ -45,7 +45,7 @@ test("viewer browses and downloads a saved report without mutation controls", as
   expect(draft.ok()).toBeTruthy();
   await page.route("**/api/access/me", (route) =>
     route.fulfill({
-      json: { mode: "cloudflare", email: "viewer@example.com", role: "viewer" },
+      json: { mode: "google", email: "viewer@example.com", role: "viewer" },
     }),
   );
   await page.goto("/");
@@ -90,7 +90,7 @@ test("owner access page grants, changes and revokes roles with confirmation", as
   const grants: Record<string, string> = {};
   await page.route("**/api/access/me", (route) =>
     route.fulfill({
-      json: { mode: "cloudflare", email: "owner@example.com", role: "owner" },
+      json: { mode: "google", email: "owner@example.com", role: "owner" },
     }),
   );
   await page.route("**/api/access/users**", async (route) => {
@@ -135,20 +135,21 @@ test("owner access page grants, changes and revokes roles with confirmation", as
 });
 
 test("unapproved accounts cannot render application pages and hosted accounts have sign-out", async ({page}) => {
+  await page.route("**/api/auth/config", route => route.fulfill({json: {enabled: true}}));
   await page.route("**/api/access/me", route => route.fulfill({
     status: 403, json: {detail: "Ask the application owner to grant access"},
   }));
   await page.goto("/");
-  await expect(page.getByRole("heading", {name: "Application access required"})).toBeVisible();
-  await expect(page.getByRole("alert")).toContainText("Ask the application owner");
+  await expect(page.getByRole("heading", {name: "Access approval required"})).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText("Ask your administrator");
   await expect(page.getByRole("heading", {name: "Your report templates"})).toHaveCount(0);
   await expect(page.getByRole("link", {name: "Manage access", exact: true})).toHaveCount(0);
   await page.unroute("**/api/access/me");
   await page.route("**/api/access/me", route => route.fulfill({
-    json: {mode: "cloudflare", email: "member@gmail.com", role: "editor"},
+    json: {mode: "google", email: "member@gmail.com", role: "editor"},
   }));
   await page.goto("/");
-  await expect(page.getByRole("link", {name: "Sign out", exact: true})).toHaveAttribute("href", "/cdn-cgi/access/logout");
+  await expect(page.getByRole("button", {name: "Sign out", exact: true})).toBeVisible();
 });
 
 test("local mode labels no-login development and disables access management", async ({
@@ -157,11 +158,70 @@ test("local mode labels no-login development and disables access management", as
   await page.goto("/access");
   await expect(page.getByText("Local development — no login")).toBeVisible();
   await expect(
-    page.getByText("Access management requires Cloudflare sign-in.", {
+    page.getByText("Access management requires Google sign-in.", {
       exact: false,
     }),
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "Grant access" })).toHaveCount(
     0,
   );
+});
+
+test("Google mode offers login and signs out using the application POST endpoint", async ({page}) => {
+  let signedIn = false;
+  await page.route("**/api/auth/config", route => route.fulfill({json: {enabled: true}}));
+  await page.route("**/api/access/me", route => route.fulfill(signedIn
+    ? {json: {mode: "google", email: "owner@gmail.com", role: "owner"}}
+    : {status: 401, json: {detail: "Sign in with Google to continue"}}));
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.getByRole("heading", {name: "Sign in to Report Formatter"})).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByText(/session expired/i)).toHaveCount(0);
+  await expect(page.getByRole("link", {name: "Sign in with Google", exact: true})).toHaveAttribute("href", "http://127.0.0.1:8011/api/auth/google");
+  await expect(page.getByRole("heading", {name: "Your report templates"})).toHaveCount(0);
+  signedIn = true;
+  await page.reload();
+  await page.route("**/api/auth/logout", route => {
+    expect(route.request().method()).toBe("POST");
+    signedIn = false;
+    return route.fulfill({json: {ok: true}});
+  });
+  await page.getByRole("button", {name: "Sign out", exact: true}).click();
+  await expect(page.getByRole("link", {name: "Sign in with Google", exact: true})).toBeVisible();
+});
+
+test("login errors are distinct from signed-out state and login fits mobile", async ({page}) => {
+  await page.route("**/api/auth/config", route => route.fulfill({json: {enabled: true}}));
+  await page.route("**/api/access/me", route => route.fulfill({status: 401, json: {detail: "Sign in"}}));
+  await page.goto("/login?auth_error=login_failed");
+  await expect(page.getByRole("alert")).toContainText("Google sign-in wasn’t completed");
+  await page.goto("/login?auth_error=not_approved");
+  await expect(page.getByRole("heading", {name: "Access approval required"})).toBeVisible();
+  await expect(page.getByRole("link", {name: "Sign in with Google", exact: true})).toBeVisible();
+  await page.goto("/login");
+  await expect(page.getByRole("heading", {name: "Sign in to Report Formatter"})).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await page.screenshot({path: "/tmp/report-login-desktop.png", fullPage: true});
+  await page.setViewportSize({width: 375, height: 812});
+  const button = page.getByRole("link", {name: "Sign in with Google", exact: true});
+  await expect(button).toBeVisible();
+  expect((await button.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({path: "/tmp/report-login-mobile.png", fullPage: true});
+});
+
+test("service failures offer retry rather than an expired-session warning", async ({page}) => {
+  let available = false;
+  await page.route("**/api/auth/config", route => route.fulfill({json: {enabled: true}}));
+  await page.route("**/api/access/me", route => route.fulfill(available
+    ? {status: 401, json: {detail: "Sign in"}}
+    : {status: 503, json: {detail: "Service unavailable"}}));
+  await page.goto("/login");
+  await expect(page.getByRole("heading", {name: "We couldn’t connect"})).toBeVisible();
+  await expect(page.getByRole("link", {name: "Sign in with Google", exact: true})).toHaveCount(0);
+  available = true;
+  await page.getByRole("button", {name: "Try again", exact: true}).click();
+  await expect(page.getByRole("heading", {name: "Sign in to Report Formatter"})).toBeVisible();
+  await expect(page.getByRole("link", {name: "Sign in with Google", exact: true})).toBeVisible();
 });

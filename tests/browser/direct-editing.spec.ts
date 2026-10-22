@@ -105,16 +105,15 @@ test("new input automatically covers source content, focuses its name and Enter 
   expect(id).toBeTruthy();
   const input = layer.locator(`[data-box-kind="field"][data-box-id="${id}"]`);
   const cover = layer.locator(`[data-box-kind="cover"][data-box-id="${id}"]`);
-  const sameBounds = async () => {
-    await expect(cover).toHaveCount(1);
-    await expect(cover.locator(":scope > rect").first()).toHaveAttribute("fill", "#ffffff");
-    for (const attribute of ["x", "y", "width", "height"])
-      expect(await cover.locator(":scope > rect").first().getAttribute(attribute)).toBe(
-        await input.locator(":scope > rect").first().getAttribute(attribute),
-      );
+  await expect(cover).toHaveCount(1);
+  await expect(cover.locator(":scope > rect").first()).toHaveAttribute("fill", "#ffffff");
+  const coverBounds = await cover.locator(":scope > rect").first().evaluate(node =>
+    Object.fromEntries(["x","y","width","height"].map(key => [key,node.getAttribute(key)])));
+  const unchangedCover = async () => {
+    for (const [key,value] of Object.entries(coverBounds))
+      await expect(cover.locator(":scope > rect").first()).toHaveAttribute(key,value!);
   };
-  await sameBounds();
-  // Resize the input: the paired cover must follow without consuming extra history.
+  // Input resizing leaves the independently sized background cover unchanged.
   const handle = input.locator('[data-resize-edge="se"]');
   await handle.scrollIntoViewIfNeeded();
   const bounds = (await handle.boundingBox())!;
@@ -122,7 +121,7 @@ test("new input automatically covers source content, focuses its name and Enter 
   await page.mouse.down();
   await page.mouse.move(bounds.x + 24, bounds.y + 15, {steps: 3});
   await page.mouse.up();
-  await sameBounds();
+  await unchangedCover();
   const review = page.waitForResponse(r => r.url().endsWith("/api/templates/review") && r.request().method() === "POST");
   await page.getByRole("button", {name: "View clean template", exact: true}).click();
   expect((await review).ok()).toBe(true);
@@ -133,7 +132,7 @@ test("new input automatically covers source content, focuses its name and Enter 
   await expect(input).toHaveCount(0);
   await expect(cover).toHaveCount(0);
   await page.keyboard.press("Control+z");
-  await sameBounds();
+  await unchangedCover();
   const savedResponse = page.waitForResponse(r => r.url() === `${api}/${template.id}` && r.request().method() === "PUT");
   await page.getByRole("button", {name: "Save template", exact: true}).click();
   const response = await savedResponse;
@@ -142,8 +141,9 @@ test("new input automatically covers source content, focuses its name and Enter 
   const savedField = saved.definition.fields.find((field: {id: string}) => field.id === id);
   const savedCover = saved.definition.clear_areas.find((area: {id: string}) => area.id === id);
   expect(savedField.label).toBe("New equipment name");
-  for (const attribute of ["page", "x", "y", "width", "height"])
-    expect(savedCover[attribute]).toBe(savedField[attribute]);
+  for (const attribute of ["x", "y", "width", "height"])
+    expect(savedCover[attribute]).toBe(Number(coverBounds[attribute]));
+  expect(savedField.width).toBeGreaterThan(savedCover.width);
 });
 
 test("Ctrl-click selects a group, pastes attached covers and gives new image boxes covers", async ({page, request}) => {
@@ -163,16 +163,10 @@ test("Ctrl-click selects a group, pastes attached covers and gives new image box
   const copiedIds = await layer.locator('[data-box-kind="field"][data-selected="true"]').evaluateAll(
     nodes => nodes.map(node => node.getAttribute("data-box-id")!),
   );
-  const checkCovers = async () => {
-    for (const id of copiedIds) {
-      const field = layer.locator(`[data-box-kind="field"][data-box-id="${id}"] > rect`).first();
-      const cover = layer.locator(`[data-box-kind="cover"][data-box-id="${id}"] > rect`).first();
-      for (const key of ["x", "y", "width", "height"])
-        expect(await cover.getAttribute(key)).toBe(await field.getAttribute(key));
-      await expect(cover).toHaveAttribute("fill", "#ffffff");
-    }
-  };
-  await checkCovers();
+  const coverGeometry = () => layer.locator('[data-box-kind="cover"] > rect').evaluateAll(nodes =>
+    nodes.map(node => ["x","y","width","height","fill"].map(key => node.getAttribute(key))));
+  const originalCovers = await coverGeometry();
+  const checkCovers = async () => expect(await coverGeometry()).toEqual(originalCovers);
   await page.keyboard.press("ArrowRight");
   await checkCovers();
   const photo = layer.locator(`[data-box-kind="field"][data-box-id="${copiedIds[1]}"] > rect`).first();
@@ -181,7 +175,7 @@ test("Ctrl-click selects a group, pastes attached covers and gives new image box
   await layer.focus();
   await page.keyboard.press("Delete");
   await expect(layer.locator('[data-box-kind="field"]')).toHaveCount(initialFields);
-  await expect(layer.locator('[data-box-kind="cover"]')).toHaveCount(initialCovers);
+  await expect(layer.locator('[data-box-kind="cover"]')).toHaveCount(initialCovers + 2);
   await page.keyboard.press("Control+z");
   await checkCovers();
   await page.getByRole("button", {name: "Image box", exact: true}).click();
@@ -207,7 +201,7 @@ test("saving a template shows success and opens its report library", async ({pag
     .getByLabel("Selected field alignment", {exact: true});
   await toolbarAlignment.selectOption("left");
   await expect(alignment).toHaveValue("left");
-  await expect(page.locator('[data-box-id="company"][data-box-kind="field"] > text')).toHaveAttribute("text-anchor", "start");
+  await expect(page.locator('[data-template-label="company"] > text')).toHaveAttribute("text-anchor", "middle");
   await page.locator('[data-box-id="photo"][data-box-kind="field"] > rect').first().click();
   await expect(toolbarAlignment).toBeDisabled();
   await page.locator('[data-box-id="date"][data-box-kind="field"] > rect').first().click();
@@ -216,9 +210,9 @@ test("saving a template shows success and opens its report library", async ({pag
   await expect(toolbarAlignment).toHaveValue("left");
   await alignment.selectOption("right");
   await expect(toolbarAlignment).toHaveValue("right");
-  await expect(page.locator('[data-box-id="company"][data-box-kind="field"] > text')).toHaveAttribute("text-anchor", "end");
+  await expect(page.locator('[data-template-label="company"] > text')).toHaveAttribute("text-anchor", "middle");
   await page.getByLabel("Default value for new reports").fill("Aligned default");
-  await expect(page.locator('[data-template-default="company"] > text')).toHaveAttribute("text-anchor", "end");
+  await expect(page.locator('[data-template-default="company"] > text')).toHaveAttribute("text-anchor", "middle");
   await page.getByRole("button", {name: "Save template", exact: true}).click();
   await expect(page.getByRole("alertdialog")).toContainText("Template saved successfully");
   await expect(page).toHaveURL(new RegExp(`/templates/custom/${template.id}$`));
@@ -397,7 +391,7 @@ test("missing title blocks saving and future-configuration dialog keeps all cont
     .fill("Configuration popup");
   await expect(save).toHaveClass(/bg-primary/);
   await page.getByLabel("Company", { exact: true }).focus();
-  await page.getByLabel("Report font size", { exact: true }).fill("12");
+  await page.getByLabel("Report font size", { exact: true }).selectOption("12");
   await save.click();
   const dialog = page.getByRole("alertdialog");
   await contained(dialog);

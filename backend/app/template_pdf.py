@@ -15,12 +15,14 @@ from reportlab.pdfgen import canvas
 
 from .template_models import (
     ClearArea,
+    PageBox,
     PageSize,
     TemplateDefinition,
     TemplateField,
     TemplateReport,
     resolved_values,
 )
+from .table_detection import refine_table_layout
 
 
 def inspect_pdf(payload: bytes) -> list[PageSize]:
@@ -52,6 +54,37 @@ def _box(page, x0, top, x1, bottom, size):
         width=(x1 - x0) / size.width,
         height=(bottom - top) / size.height,
     )
+
+
+def _intersects(a, b):
+    """Positive-area intersection; touching neighbouring cells are distinct."""
+    return min(a[2], b[2]) > max(a[0], b[0]) and min(a[3], b[3]) > max(a[1], b[1])
+
+
+def _needs_cover(page, bounds):
+    """White paper/white-filled fields and image overlays need attached covers."""
+    l, t, r, b = bounds
+    if any(_intersects(bounds, (i["x0"], i["top"], i["x1"], i["bottom"])) for i in page.images):
+        return True
+    background = 1.0  # Unpainted PDF paper is white.
+    for rect in page.rects:
+        if not rect.get("fill"):
+            continue
+        overlap = max(0, min(r, rect["x1"]) - max(l, rect["x0"])) * max(0, min(b, rect["bottom"]) - max(t, rect["top"]))
+        if overlap > (r-l)*(b-t)*0.5:
+            colour = rect.get("non_stroking_color")
+            background = colour if colour is not None else 0.0  # PDF's default fill is black.
+    if isinstance(background, (int, float)):
+        return background >= .95
+    # Word renderers can emit named PDF pattern/spot colours, not RGB numbers.
+    # Unknown paint must not be assumed white or compared numerically.
+    if not isinstance(background, (tuple, list)) or not background or not all(
+        isinstance(value, (int, float)) for value in background
+    ):
+        return False
+    if len(background) == 4:  # CMYK white has no ink.
+        return all(value <= .05 for value in background)
+    return all(value >= .95 for value in background)
 
 
 def analyze_pdf(payload: bytes) -> dict:
@@ -157,7 +190,28 @@ def analyze_pdf(payload: bytes) -> dict:
                 ):
                     continue
                 unique[tuple(round(n / 2) * 2 for n in cell)] = cell
-            cells = list(unique.values())
+            # Rounded coordinate buckets alone miss double borders when one edge
+            # falls on either side of a bucket. Prefer the smaller cell and reject
+            # substantially identical outlines using their actual geometry.
+            cells = []
+            for cell in sorted(unique.values(), key=lambda c: (c[2] - c[0]) * (c[3] - c[1])):
+                if not any(all(abs(a - b) <= 2 for a, b in zip(cell, kept)) for kept in cells):
+                    cells.append(cell)
+            occupied = list(widgets)
+            shaded = [(r["x0"], r["top"], r["x1"], r["bottom"]) for r in page.rects
+                      if r.get("fill") and isinstance(r.get("non_stroking_color"), (tuple, list))
+                      and len(r["non_stroking_color"]) == 3
+                      and max(r["non_stroking_color"]) - min(r["non_stroking_color"]) > 0.15]
+            original_cells = cells
+            cells, table_fields = refine_table_layout(cells, words, page_number, size, shaded)
+            widget_conflict = any(_intersects(
+                (f.x * size.width, f.y * size.height, (f.x + f.width) * size.width, (f.y + f.height) * size.height), w
+            ) for f in table_fields for w in widgets)
+            if table_fields and (len(fields) + len(table_fields) > 300 or widget_conflict):
+                cells, table_fields = original_cells, []
+            if table_fields:
+                fields.extend(table_fields)
+                clear_areas.extend(ClearArea(**f.model_dump(include={"id", "page", "x", "y", "width", "height"})) for f in table_fields)
             for left, top, right, bottom in cells:
                 if len(fields) >= 300:
                     break
@@ -272,6 +326,9 @@ def analyze_pdf(payload: bytes) -> dict:
                 )
                 if box["width"] <= 0 or box["height"] <= 0:
                     continue
+                editable = (left + 3, field_top, right - 3, bottom - 3)
+                if any(_intersects(editable, existing) for existing in occupied):
+                    continue
                 source_font = (
                     str(value_words[0].get("fontname", "")) if value_words else ""
                 )
@@ -306,7 +363,8 @@ def analyze_pdf(payload: bytes) -> dict:
                 if role and any(f.role == role for f in fields):
                     field.role = None
                 fields.append(field)
-                if (value_words and (caption or kind == "number")) or image_inside:
+                occupied.append(editable)
+                if _needs_cover(page, editable) or (value_words and (caption or kind == "number")) or image_inside:
                     clear_areas.append(ClearArea(id=field.id, **box))
     definition = TemplateDefinition(pages=sizes, fields=fields, clear_areas=clear_areas)
     return {
@@ -370,7 +428,7 @@ def _wrap(text, font, size, width):
     for paragraph in text.split("\n"):
         line = ""
         for word in paragraph.split():
-            candidate = f"{line} {word}".strip()
+            candidate = f"{line}{word}".strip()
             if line and pdfmetrics.stringWidth(candidate, font, size) > width:
                 lines.append(line)
                 line = ""
@@ -384,6 +442,34 @@ def _wrap(text, font, size, width):
         lines.append(line.rstrip())
     return lines
 
+
+
+def _display_value(field, values):
+    value = str(values.get(field.id, ""))
+    if field.kind == "date" and value:
+        from datetime import date
+        return date.fromisoformat(value).strftime("%d %b %Y")
+    return value
+
+
+def report_field_box(field, box, page, report, values):
+    """Honor the effective font size, inherited or overridden, by growing boxes."""
+    style = report.styles.get(field.id)
+    if field.kind in {"image", "checkbox"}:
+        return box
+    font = (style.font if style else None) or field.font
+    size = style.font_size if style and style.font_size is not None else field.font_size
+    value = _display_value(field, values)
+    desired_width = max((pdfmetrics.stringWidth(line, font, size) + 2
+                         for line in value.split("\n")), default=2)
+    width = min(page.width, max(box.width * page.width, desired_width))
+    lines = _wrap(value, font, size, max(1, width - 2))
+    height = max(box.height * page.height, len(lines) * size * 1.15 + 2)
+    if height > page.height or any(pdfmetrics.stringWidth(line, font, size) > width - 2 + .001 for line in lines):
+        raise ValueError(f"{field.label} does not fit on this page at {size:g} pt. Shorten the text or select a smaller font.")
+    width, height = width / page.width, height / page.height
+    return PageBox(page=box.page, x=max(0, min(box.x, 1-width)),
+                   y=max(0, min(box.y, 1-height)), width=width, height=height)
 
 
 def _paint_field(pdf, field, box, page, report, values, images):
@@ -431,19 +517,12 @@ def _paint_field(pdf, field, box, page, report, values, images):
         path.lineTo(x + width - pad, y + height - pad)
         pdf.drawPath(path)
     elif field.kind not in {"image", "checkbox"}:
-        value = str(values.get(field.id, ""))
-        if field.kind == "date" and value:
-            from datetime import date
-
-            value = date.fromisoformat(value).strftime("%d %b %Y")
+        value = _display_value(field, values)
         if not value:
             pdf.restoreState()
             return
-        size = max(4, min(field.font_size, height * 0.8))
+        size = field.font_size
         lines = _wrap(value, field.font, size, max(1, width - 2))
-        while size > 4 and len(lines) * size * 1.15 > height:
-            size = max(4, size - 0.5)
-            lines = _wrap(value, field.font, size, max(1, width - 2))
         if len(lines) * size * 1.15 > height or any(
             pdfmetrics.stringWidth(line, field.font, size) > max(0, width - 2)
             for line in lines
@@ -452,7 +531,7 @@ def _paint_field(pdf, field, box, page, report, values, images):
                 f"{field.label} text does not fit. Enlarge this field or shorten the text."
             )
         pdf.setFont(field.font, size)
-        baseline = y + height - (height - len(lines) * size * 1.15) / 2 - size
+        baseline = y + height - 1 - size
         for line in lines:
             if field.alignment == "center":
                 pdf.drawCentredString(x + width / 2, baseline, line)
@@ -478,6 +557,7 @@ def generate_pdf(
     fields_by_page = [[] for _ in definition.pages]
     for field in definition.fields:
         box = report.layout.get(field.id, field)
+        box = report_field_box(field, box, definition.pages[box.page], report, values)
         fields_by_page[box.page].append((field, box))
     shapes_by_page = [[] for _ in definition.pages]
     for shape in report.rectangles:
@@ -532,12 +612,17 @@ def generate_field_layers(definition, report, images):
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer)
     ids = []
+    layout = {}
     no_shapes = report.model_copy(update={"rectangles": []})
     for field in definition.fields:
-        if not (field.id in images if field.kind == "image" else values.get(field.id)):
-            continue
         box = report.layout.get(field.id, field)
         page = definition.pages[box.page]
+        box = report_field_box(field, box, page, report, values)
+        style = report.styles.get(field.id)
+        if field.kind not in {"image", "checkbox"}:
+            layout[field.id] = box.model_dump(mode="json")
+        if not (field.id in images if field.kind == "image" else values.get(field.id)):
+            continue
         size = PageSize(width=box.width*page.width, height=box.height*page.height)
         pdf.setPageSize((size.width, size.height))
         style = report.styles.get(field.id)
@@ -546,4 +631,4 @@ def generate_field_layers(definition, report, images):
         pdf.showPage()
         ids.append(field.id)
     pdf.save()
-    return {"pdf": base64.b64encode(buffer.getvalue()).decode() if ids else None, "fields": ids}
+    return {"pdf": base64.b64encode(buffer.getvalue()).decode() if ids else None, "fields": ids, "layout": layout}

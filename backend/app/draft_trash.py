@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from .template_database import Draft, DraftDeletion, DraftImage, DraftRevision, engine
+from .template_database import Draft, DraftDeletion, DraftImage, DraftRevision, WordDocument, engine
 
 RETENTION = timedelta(days=30)
 CLEANUP_INTERVAL_SECONDS = 3600
@@ -41,6 +41,7 @@ def purge_expired(db: Session, *, template_id=None):
         if not ids:
             return removed
         db.execute(delete(DraftImage).where(DraftImage.draft_id.in_(ids)))
+        db.execute(delete(WordDocument).where(WordDocument.draft_id.in_(ids)))
         db.execute(delete(DraftRevision).where(DraftRevision.draft_id.in_(ids)))
         db.execute(delete(DraftDeletion).where(DraftDeletion.draft_id.in_(ids)))
         db.execute(delete(Draft).where(Draft.id.in_(ids)))

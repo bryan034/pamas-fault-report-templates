@@ -92,8 +92,9 @@ test("selection deduplicates attached covers and group movement preserves spacin
   assert.ok(Math.abs(moved.fields[1].x - moved.fields[0].x - 0.3) < 1e-9);
   assert.equal(moved.fields[0].y, 0);
   assert.equal(moved.clear_areas[0].color, "#ffffff");
-  assert.equal(moved.clear_areas[0].x, moved.fields[0].x);
-  assert.equal(moved.clear_areas[0].y, moved.fields[0].y);
+  assert.equal(moved.clear_areas[0].x, schema.clear_areas[0].x);
+  assert.equal(moved.clear_areas[0].y, schema.clear_areas[0].y);
+  assert.notEqual(moved.clear_areas[0].id, "n1");
   assert.equal(schema.fields[0].x, 0.1);
   assert.equal(moveBoxes(schema, [], 1, 1), schema);
 });
@@ -149,4 +150,27 @@ test("report resize remains within page boundaries and tick uses curved geometry
   assert.ok(resized.width > 0);
   assert.match(tickPath, / C /);
   assert.match(tickPath, / Z$/);
+});
+
+test("moving a field detaches its stationary cover; duplication preserves cover geometry", () => {
+  const source = {...field("text",.4,.3),width:.4,height:.15};
+  const cover = {id:"text",page:0,x:.5,y:.35,width:.1,height:.03,color:"#eeeeee"};
+  const schema = {...definition,fields:[source],clear_areas:[cover]};
+  const selected = selectionBoxes(schema,[{kind:"field",id:"text"}]);
+  const moved = moveBoxes(schema,selected,.1,.1);
+  assert.equal(moved.clear_areas[0].width,.1);
+  assert.equal(moved.clear_areas[0].height,.03);
+  assert.equal(moved.clear_areas[0].x,.5);
+  assert.equal(moved.clear_areas[0].y,.35);
+  assert.notEqual(moved.clear_areas[0].id,source.id);
+  const again=moveBoxes(moved,selectionBoxes(moved,[{kind:"field",id:"text"}]),.01,.01);
+  assert.deepEqual(again.clear_areas,moved.clear_areas);
+  const coverMove=moveBoxes(moved,selectionBoxes(moved,[{kind:"cover",id:moved.clear_areas[0].id}]),.01,.01);
+  assert.deepEqual(coverMove.fields,moved.fields);
+  assert.ok(coverMove.clear_areas[0].x>moved.clear_areas[0].x);
+  const pasted = duplicateBox(schema,selected[0],"new",.05);
+  assert.equal(pasted.clear_areas[1].width,.1);
+  assert.equal(pasted.clear_areas[1].height,.03);
+  assert.ok(Math.abs(pasted.clear_areas[1].x-.55)<1e-9);
+  assert.ok(Math.abs(pasted.clear_areas[1].y-.4)<1e-9);
 });

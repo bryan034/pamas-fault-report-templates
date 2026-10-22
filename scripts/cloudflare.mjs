@@ -20,8 +20,8 @@ function run(binary, args, useBuiltConfig = false) {
 const webConfig = "deploy/cloudflare/web/wrangler.jsonc";
 if (action === "deploy-web") {
   const settings = JSON.parse(readFileSync(new URL(`../${webConfig}`, import.meta.url), "utf8")).env[environment];
-  if (!settings.routes.length || JSON.stringify(settings.vars).includes("REPLACE_WITH")) {
-    throw new Error("Configure the custom domain, Access team domain and AUD in deploy/cloudflare/web/wrangler.jsonc first. See docs/cloudflare-deployment.md.");
+  if (!settings.routes.length) {
+    throw new Error("Configure the frontend custom domain in deploy/cloudflare/web/wrangler.jsonc first. See docs/cloudflare-deployment.md.");
   }
 }
 if (action === "build" || action === "deploy-web") {

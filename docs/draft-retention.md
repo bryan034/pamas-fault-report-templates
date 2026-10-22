@@ -12,11 +12,10 @@ cards show deletion and permanent-deletion dates; restore returns the report to
 
 ## Storage and rollout
 
-The additive `template_draft_deletions` table records `draft_id` and a UTC
+The `template_draft_deletions` table records `draft_id` and a UTC
 `deleted_at` timestamp. The existing draft, image and revision-binding rows stay
 in place until expiry, rather than being copied to a new folder or volume.
-SQLAlchemy creates the table at backend startup, using the same configured
-database/schema. Existing saved drafts remain active and unchanged. No database
+Alembic creates the table in the configured database/schema. Existing saved drafts remain active and unchanged. No database
 reset or volume deletion is required. Back up data before deploying a release.
 
 Rebuild/start the backend and frontend for local Docker:

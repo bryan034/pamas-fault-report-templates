@@ -580,9 +580,16 @@ def test_all_entered_custom_text_fits_or_is_rejected():
     model = TemplateDefinition.model_validate(definition)
     text = "Important content " * 50
     blank, _ = template_pdf.clean_pdf(samples.sample_pdf(), model)
+    # A small input box grows to preserve the template font size and all text.
+    payload = template_pdf.generate_pdf(
+        blank, model, TemplateReport(values={"company": text}), {}
+    )
+    printed = PdfReader(BytesIO(payload)).pages[0].extract_text()
+    assert " ".join(printed.split()) == " ".join(text.split())
+    # Content exceeding the entire page still fails instead of shrinking/clipping.
     with pytest.raises(ValueError, match="does not fit"):
         template_pdf.generate_pdf(
-            blank, model, TemplateReport(values={"company": text}), {}
+            blank, model, TemplateReport(values={"company": text * 10}), {}
         )
 
 

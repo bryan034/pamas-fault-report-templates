@@ -81,10 +81,9 @@ export default function AccessPage() {
           <p>Checking access…</p>
         ) : access.user?.mode === "local" ? (
           <p>
-            Access management requires Cloudflare sign-in. Configure Google
-            sign-in and Access for the hosted deployment, or use .env.tunnel
-            with a protected named Tunnel. Local development has no login and
-            cannot manage grants.
+            Access management requires Google sign-in. Configure the Google
+            OAuth credentials and set TEMPLATE_ACCESS_MODE=google in .env,
+            then recreate the backend. No-login development cannot manage grants.
           </p>
         ) : !access.canManage ? (
           <p role="alert">
@@ -102,10 +101,9 @@ export default function AccessPage() {
               saved reports. Only the owner can manage access.
             </p>
             <p>
-              Google sign-in is handled by Cloudflare Access. This list decides
-              which signed-in accounts can use the application. With the Google
-              login-method policy configured, you only need to manage emails here.
-              This page does not send invitations or change Cloudflare policies.
+              Google sign-in is handled by this application. This list decides
+              which signed-in accounts can use it. Manage approved emails here;
+              this page does not send invitation emails.
             </p>
             <form
               className="access-grant-form"

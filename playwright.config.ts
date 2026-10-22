@@ -23,7 +23,9 @@ export default defineConfig({
         "cd backend && UV_CACHE_DIR=.uv-cache uv run python -m uvicorn app.template_main:app --host 127.0.0.1 --port 8011",
       url: "http://127.0.0.1:8011/api/health",
       reuseExistingServer: false,
-      env: { TEMPLATE_DATABASE_URL: `sqlite+pysqlite:///${database}` },
+      env: {
+        TEMPLATE_DATABASE_URL: `sqlite+pysqlite:///${database}`,
+      },
     },
     {
       command: "npm run dev -- --port 5174",

@@ -199,7 +199,7 @@ test("report drawing and formatting toolbar stays accessible when scrolling on d
       return !!toolbar && !!scroll && Math.abs(toolbar.y - scroll.y) < 2;
     })
     .toBe(true);
-  await page.getByLabel("Report font size", { exact: true }).fill("12");
+  await page.getByLabel("Report font size", { exact: true }).selectOption("12");
   await expect(
     page.getByLabel("Report font size", { exact: true }),
   ).toHaveValue("12");

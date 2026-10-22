@@ -86,7 +86,7 @@ test("ribbon, resize edges, keyboard deletion and five-step undo, covers, image 
   await page.getByLabel("Field label", { exact: true }).fill("Temperature");
   await page.getByLabel("Field type").selectOption("number");
   await page.getByLabel("Font", { exact: true }).selectOption("Helvetica");
-  await page.getByLabel("Font size", { exact: true }).fill("18");
+  await page.getByLabel("Font size", { exact: true }).selectOption("18");
   await page.getByLabel("Font color").evaluate((node) => {
     Object.getOwnPropertyDescriptor(
       HTMLInputElement.prototype,

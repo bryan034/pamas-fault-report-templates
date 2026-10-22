@@ -1,8 +1,8 @@
 "use client";
 import { useCallback, useRef, useState } from "react";
 
-/** A pointer drag records once; intermediate pointer events don't consume history. */
-export function useEditHistory<T>(initial: T) {
+/** Record user edits; derived updates preserve redo and do not consume history. */
+export function useEditHistory<T>(initial: T, limit = 5) {
   const [state, render] = useState(() => ({
     value: initial,
     past: [] as T[],
@@ -18,11 +18,11 @@ export function useEditHistory<T>(initial: T) {
     if (value === current.value) return;
     store.current = {
       value,
-      past: record ? [...current.past, current.value].slice(-5) : current.past,
-      future: [],
+      past: record ? [...current.past, current.value].slice(-limit) : current.past,
+      future: record ? [] : current.future,
     };
     render(store.current);
-  }, []);
+  }, [limit]);
   const reset = useCallback((value: T) => {
     store.current = { value, past: [], future: [] };
     render(store.current);
@@ -33,20 +33,20 @@ export function useEditHistory<T>(initial: T) {
     store.current = {
       value: past[past.length - 1],
       past: past.slice(0, -1),
-      future: [value, ...future].slice(0, 5),
+      future: [value, ...future].slice(0, limit),
     };
     render(store.current);
-  }, []);
+  }, [limit]);
   const redo = useCallback(() => {
     const { value, past, future } = store.current;
     if (!future.length) return;
     store.current = {
       value: future[0],
-      past: [...past, value].slice(-5),
+      past: [...past, value].slice(-limit),
       future: future.slice(1),
     };
     render(store.current);
-  }, []);
+  }, [limit]);
   return {
     value: state.value,
     set,

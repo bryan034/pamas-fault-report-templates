@@ -114,6 +114,16 @@ def validate_docx(payload: bytes) -> None:
 
 
 def docx_to_pdf(payload: bytes) -> bytes:
+    # Docker selects the headless renderer verified against the two-page sample.
+    # Never silently fall back to a different layout engine after an outage.
+    selected = os.environ.get("WORD_CONVERSION_ENGINE") or (
+        "onlyoffice" if os.environ.get("ONLYOFFICE_INTERNAL_URL") else "libreoffice"
+    )
+    if selected == "onlyoffice":
+        from .onlyoffice import request_pdf
+        return request_pdf(payload)
+    if selected != "libreoffice":
+        raise ConverterUnavailable("WORD_CONVERSION_ENGINE must be onlyoffice or libreoffice")
     validate_docx(payload)
     executable = (
         os.environ.get("LIBREOFFICE_BINARY")

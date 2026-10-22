@@ -1,17 +1,20 @@
-# Optional overlay: keep the app/database on this laptop, protect remote access.
-# Run through npm run dev:tunnel after configuring Access and .env.tunnel.
+# Optional named tunnel. Authentication is owned by Python, not Cloudflare Access.
 services:
   web:
+    networks: [default, protected-tunnel]
+
+  word-gateway:
     networks: [default, protected-tunnel]
 
   template-service:
     networks: [default, protected-tunnel]
     environment:
-      TEMPLATE_ACCESS_MODE: cloudflare
+      TEMPLATE_ACCESS_MODE: google
       TEMPLATE_OWNER_EMAIL: ${TEMPLATE_OWNER_EMAIL:?Set the main owner email in .env.tunnel}
-      ACCESS_TEAM_DOMAIN: ${ACCESS_TEAM_DOMAIN:?Set your Access team domain in .env.tunnel}
-      ACCESS_AUD: ${ACCESS_AUD:?Set the Access application AUD in .env.tunnel}
-      TEMPLATE_PUBLIC_ORIGIN: ${TEMPLATE_PUBLIC_ORIGIN:?Set the protected HTTPS origin in .env.tunnel}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?Set the Google OAuth client ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:?Set the Google OAuth client secret}
+      TEMPLATE_PUBLIC_ORIGIN: ${TEMPLATE_PUBLIC_ORIGIN:?Set the HTTPS origin in .env.tunnel}
+      TEMPLATE_AUTH_ORIGIN: ${TEMPLATE_PUBLIC_ORIGIN:?Set the HTTPS origin in .env.tunnel}
 
   cloudflared:
     image: cloudflare/cloudflared:latest
@@ -19,6 +22,8 @@ services:
     environment:
       TUNNEL_TOKEN: ${TUNNEL_TOKEN:?Set the tunnel token in .env.tunnel}
     depends_on:
+      word-gateway:
+        condition: service_started
       web:
         condition: service_started
       template-service:

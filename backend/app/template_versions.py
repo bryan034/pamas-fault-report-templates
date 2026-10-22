@@ -77,7 +77,13 @@ def resolve(db, template, revision_id=None):
 
 def bootstrap(db):
     """One-time, additive backfill; never replace existing draft bindings."""
-    for template_id in db.scalars(select(Template.id)):
+    missing_revisions = select(Template.id).where(
+        ~select(TemplateRevision.id).where(TemplateRevision.template_id == Template.id).exists()
+    )
+    unbound_drafts = select(Draft.template_id).where(
+        ~select(DraftRevision.draft_id).where(DraftRevision.draft_id == Draft.id).exists()
+    )
+    for template_id in db.scalars(missing_revisions.union(unbound_drafts)):
         template = db.get(
             Template,
             template_id,

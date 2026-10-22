@@ -13,10 +13,6 @@
       "workers_dev": false,
       "preview_urls": false,
       "routes": [],
-      "vars": {
-        "ACCESS_TEAM_DOMAIN": "REPLACE_WITH_TEAM.cloudflareaccess.com",
-        "ACCESS_AUD": "REPLACE_WITH_STAGING_ACCESS_APPLICATION_AUD"
-      },
       "services": [{ "binding": "TEMPLATE_API", "service": "report-formatter-api-staging" }]
     },
     "production": {
@@ -24,10 +20,6 @@
       "workers_dev": false,
       "preview_urls": false,
       "routes": [],
-      "vars": {
-        "ACCESS_TEAM_DOMAIN": "REPLACE_WITH_TEAM.cloudflareaccess.com",
-        "ACCESS_AUD": "REPLACE_WITH_PRODUCTION_ACCESS_APPLICATION_AUD"
-      },
       "services": [{ "binding": "TEMPLATE_API", "service": "report-formatter-api-production" }]
     }
   }

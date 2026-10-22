@@ -10,7 +10,6 @@ import {
 } from "react";
 import { RectangleHorizontal, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import TemplatePdfViewer from "@/components/template-pdf-viewer";
 import type {
   Definition,
@@ -29,6 +28,7 @@ import {
   type Edge,
 } from "@/lib/template-editing";
 import { extractionMime } from "@/components/image-extraction";
+import { fontSizes } from "@/lib/font-sizes";
 import { createId } from "@/lib/create-id";
 
 export const reportFonts = [
@@ -71,6 +71,7 @@ type Gesture = {
 };
 const clamp = (n: number, min: number, max: number) =>
   Math.max(min, Math.min(max, n));
+const defaultTickSize = { width: 0.035, height: 0.025 };
 
 export default function ReportPreview({
   definition,
@@ -110,8 +111,7 @@ export default function ReportPreview({
     [localField, setLocalField] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [color, setColor] = useState("#ef2323"),
-    [stroke, setStroke] = useState(3),
-    [fontDraft, setFontDraft] = useState("");
+    [stroke, setStroke] = useState(3);
   const gesture = useRef<Gesture | null>(null);
   const tools = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -156,7 +156,7 @@ export default function ReportPreview({
       }
       if (
         target.closest(
-          "[data-field-id],[data-shape-id],[data-inline-editor],.report-preview-tools",
+          "[data-field-id],[data-shape-id],[data-inline-editor],[data-report-history],.report-preview-tools",
         )
       )
         return;
@@ -177,8 +177,6 @@ export default function ReportPreview({
         alignment: override?.alignment ?? field.alignment,
       }
     : null;
-  const [fontKey, setFontKey] = useState("");
-  const effectiveKey = `${fieldId}:${style?.font_size}`;
   const boxFor = (item: TemplateField): PageBox =>
     report.layout[item.id] || item;
   const shapeBox = (shape: Rectangle): PageBox | null => {
@@ -333,12 +331,12 @@ export default function ReportPreview({
     event.preventDefault();
     event.stopPropagation();
     const p = point(event);
-    p.svg.setPointerCapture(event.pointerId);
     setEditing(null);
     activate(null);
     if (shape) {
       const box = shapeBox(shape);
       if (!box) return;
+      p.svg.setPointerCapture(event.pointerId);
       setSelected(shape.id);
       setColor(shape.color);
       setStroke(shape.stroke_width);
@@ -356,18 +354,27 @@ export default function ReportPreview({
         id: createId(),
         page,
         kind: mode === "tick" ? "tick" : "rectangle",
-        x: Math.min(p.x, 0.96),
-        y: Math.min(p.y, 0.97),
-        width: mode === "tick" ? 0.035 : 0.002,
-        height: mode === "tick" ? 0.025 : 0.002,
+        x: Math.min(p.x, mode === "tick" ? 1 - defaultTickSize.width : 0.96),
+        y: Math.min(p.y, mode === "tick" ? 1 - defaultTickSize.height : 0.97),
+        width: mode === "tick" ? defaultTickSize.width : 0.002,
+        height: mode === "tick" ? defaultTickSize.height : 0.002,
         color,
         stroke_width: stroke,
       };
+      if (next.kind !== "tick") onDragState?.(true);
       onChange((current) => ({
         ...current,
         rectangles: [...current.rectangles, next],
       }));
       setSelected(next.id);
+      if (next.kind === "tick") {
+        // A tick is a one-click stamp, not a drag-sized rectangle. Even tiny
+        // pointer movement during a click must not overwrite its default size.
+        gesture.current = null;
+        setMode("normal");
+        return;
+      }
+      p.svg.setPointerCapture(event.pointerId);
       gesture.current = {
         kind: "draw",
         id: next.id,
@@ -508,30 +515,18 @@ export default function ReportPreview({
           </label>
           <label>
             Size{" "}
-            <Input
+            <select
               aria-label="Report font size"
-              list="report-font-sizes"
-              inputMode="decimal"
               disabled={!field || field.kind === "image"}
-              value={
-                fontKey === effectiveKey
-                  ? fontDraft
-                  : String(style?.font_size || 16)
-              }
-              onChange={(event) => {
-                setFontKey(effectiveKey);
-                setFontDraft(event.target.value);
-                const size = Number(event.target.value);
-                if (size >= 4 && size <= 72) updateStyle({ font_size: size });
-              }}
-              onBlur={() => setFontKey("")}
-            />
+              value={style?.font_size || 16}
+              onChange={(event) => updateStyle({ font_size: Number(event.target.value) })}
+            >
+              {style && !fontSizes.includes(style.font_size) && (
+                <option value={style.font_size} disabled>{style.font_size}</option>
+              )}
+              {fontSizes.map(size => <option key={size} value={size}>{size}</option>)}
+            </select>
           </label>
-          <datalist id="report-font-sizes">
-            {[8, 10, 12, 14, 16, 18, 20, 24, 28, 36, 48, 72].map((size) => (
-              <option key={size} value={size} />
-            ))}
-          </datalist>
           <label>
             Alignment{" "}
             <select
@@ -636,8 +631,13 @@ export default function ReportPreview({
                 viewBox="0 0 1 1"
                 preserveAspectRatio="none"
                 aria-label={`Report editing areas, page ${page + 1}`}
+                onPointerDownCapture={(event) => {
+                  // Stamp over existing input/shape hit targets too.
+                  if (mode === "tick" && event.button === 0) beginShape(event, page);
+                }}
                 onPointerDown={(event) => {
-                  if (mode !== "normal") beginShape(event, page);
+                  if (mode === "rectangle" && event.button === 0)
+                    beginShape(event, page);
                 }}
                 onPointerMove={move}
                 onPointerUp={finish}
@@ -894,10 +894,10 @@ export default function ReportPreview({
                       className="report-inline-editor"
                       data-inline-editor={item.id}
                       style={{
-                        left: `calc(${box.x * 100}% + 5px)`,
-                        top: `calc(${box.y * 100}% + 5px)`,
-                        width: `calc(${box.width * 100}% - 10px)`,
-                        height: `calc(${box.height * 100}% - 10px)`,
+                        left: `calc(${box.x * 100}% + ${100 / size.width}cqw)`,
+                        top: `calc(${box.y * 100}% + ${100 / size.width}cqw)`,
+                        width: `calc(${box.width * 100}% - ${200 / size.width}cqw)`,
+                        height: `calc(${box.height * 100}% - ${200 / size.width}cqw)`,
                       }}
                     >
                       {item.kind === "checkbox" ? (
