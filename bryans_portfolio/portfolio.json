@@ -1,7 +1,7 @@
 {
   "version": 1,
   "title": "Report Formatter",
-  "summary": "A private document template application with PDF/Word imports, OCR-assisted reports, revision-pinned drafts and Google sign-in; prepared for Cloudflare Workers/Containers with Supabase PostgreSQL.",
+  "summary": "A document automation application that turns PDF and Word files into reusable templates.",
   "category": "Document automation",
   "role": "Product designer and implementation reviewer",
   "technologies": [
@@ -25,8 +25,8 @@
   "featured": true,
   "visible": true,
   "order": 100,
-  "coverAlt": "Template builder showing draggable fields and percentage-calculation settings.",
-  "coverCaption": "Template builder with calculated fields on a synthetic two-page PDF used in browser tests.",
+  "coverAlt": "Report template creator",
+  "coverCaption": "Template builder.",
   "contributions": [
     "Designed the shared PDF/Word template builder, report editor, and configurable image-extraction workflow.",
     "Specified revision-safe drafts, reusable field defaults, keyboard entry, annotations, calculations, and cross-format export requirements.",
