@@ -15,16 +15,29 @@ Led product design, workflow requirements and implementation review using AI-ass
 
 ## Technologies
 
-| Area | Stack |
-| --- | --- |
-| Frontend | React, TypeScript, Vinext, Vite |
-| Backend | Python, FastAPI, Pydantic |
-| Database | PostgreSQL, SQLAlchemy, Alembic |
-| Document processing | PDF.js, ReportLab, pdfplumber, python-docx, ONLYOFFICE |
-| OCR | Tesseract.js |
-| Infrastructure | Docker, Cloudflare Workers/Containers, Supabase |
-| Authentication | Google OAuth/OIDC |
-| Testing | Playwright, pytest, Node.js tests |
+**Frontend**  
+React · TypeScript · Vinext · Vite
+
+**Backend**  
+Python · FastAPI · Pydantic
+
+**Database**  
+PostgreSQL · SQLAlchemy · Alembic
+
+**Document processing**  
+PDF.js · ReportLab · pdfplumber · python-docx · ONLYOFFICE
+
+**OCR**  
+Tesseract.js
+
+**Infrastructure**  
+Docker · Cloudflare Workers/Containers · Supabase
+
+**Authentication**  
+Google OAuth/OIDC
+
+**Testing**  
+Playwright · pytest · Node.js tests
 
 ## Skills demonstrated
 
