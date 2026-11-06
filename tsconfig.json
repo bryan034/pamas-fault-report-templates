@@ -43,6 +43,9 @@
   ],
   "exclude": [
     "node_modules",
-    "examples"
+    "examples",
+    "desktop/node_modules",
+    "desktop/.build",
+    "desktop/dist"
   ]
 }

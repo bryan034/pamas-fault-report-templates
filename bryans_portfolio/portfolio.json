@@ -1,7 +1,7 @@
 {
   "version": 1,
   "title": "Report Formatter",
-  "summary": "A document automation application that turns PDF and Word files into reusable templates.",
+  "summary": "A document automation application that turns PDF and Word files into reusable templates, with a web deployment and an offline Windows desktop edition.",
   "category": "Document automation",
   "role": "Product designer and implementation reviewer",
   "technologies": [
@@ -19,17 +19,22 @@
     "Alembic",
     "Google OAuth",
     "Cloudflare Workers/Containers",
-    "Supabase"
+    "Supabase",
+    "Electron",
+    "electron-builder",
+    "SQLite",
+    "LibreOffice"
   ],
   "status": "Independent project",
   "featured": true,
   "visible": true,
   "order": 100,
-  "coverAlt": "Report template creator",
-  "coverCaption": "Template builder.",
+  "coverAlt": "Report Formatter template library showing a fault report template card",
+  "coverCaption": "Template library.",
   "contributions": [
     "Designed the shared PDF/Word template builder, report editor, and configurable image-extraction workflow.",
     "Specified revision-safe drafts, reusable field defaults, keyboard entry, annotations, calculations, and cross-format export requirements.",
+    "Defined an offline Windows edition for non-technical users, with a desktop icon, preloaded templates, Word upload, and backup and restore.",
     "Reviewed AI-assisted implementation across the interface, PDF processing, persistence, and regression tests."
   ],
   "contributionConfirmed": true,

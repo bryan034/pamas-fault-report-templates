@@ -1,0 +1,46 @@
+{
+  "name": "report-formatter-desktop",
+  "productName": "Report Formatter",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Report Formatter desktop application",
+  "author": "Report Formatter",
+  "main": "main.cjs",
+  "scripts": {
+    "web": "node scripts/build-web.mjs",
+    "start": "npm run web && electron .",
+    "seed": "node scripts/export-seed.mjs",
+    "build:windows": "node scripts/build-windows.mjs"
+  },
+  "devDependencies": {
+    "electron": "45.2.3",
+    "electron-builder": "26.18.0"
+  },
+  "build": {
+    "appId": "local.reportformatter.desktop",
+    "productName": "Report Formatter",
+    "directories": { "output": "dist", "buildResources": "build" },
+    "files": ["main.cjs", "preload.cjs", "starting.html", "package.json"],
+    "extraResources": [
+      { "from": ".build/windows/python", "to": "python" },
+      { "from": ".build/windows/backend", "to": "backend" },
+      { "from": ".build/windows/libreoffice", "to": "libreoffice" },
+      { "from": ".build/web", "to": "web" },
+      { "from": ".build/seed", "to": "seed" }
+    ],
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": true
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "Report Formatter",
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "Report-Formatter-Setup-${version}.${ext}"
+    }
+  }
+}

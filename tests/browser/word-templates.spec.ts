@@ -47,6 +47,16 @@ test("PDF templates export Word and PDF without an original-template download bu
   await expect(page).toHaveURL(/\/drafts\//);
   await page.goto(`/templates/custom/${template.id}`);
   for (const [button, extension] of [
+    ["Download blank PDF", "pdf"],
+    ["Download blank Word", "docx"],
+  ]) {
+    const downloading = page.waitForEvent("download");
+    await page.getByRole("button", { name: button, exact: true }).click();
+    expect((await downloading).suggestedFilename()).toBe(
+      `PDF cross-format-blank.${extension}`,
+    );
+  }
+  for (const [button, extension] of [
     ["Download PDF", "pdf"],
     ["Download Word", "docx"],
   ]) {

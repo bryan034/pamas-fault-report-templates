@@ -21,6 +21,13 @@ from .template_models import PageBox
 
 V = "urn:schemas-microsoft-com:vml"
 O = "urn:schemas-microsoft-com:office:office"
+WORD_FONTS = {
+    "Times-Roman": "Times New Roman",
+    "Times-Bold": "Times New Roman",
+    "Helvetica": "Arial",
+    "Helvetica-Bold": "Arial",
+    "Courier": "Courier New",
+}
 
 
 def _page_picture(paragraph, payload, width, height, identity):
@@ -69,60 +76,82 @@ def _page_picture(paragraph, payload, width, height, identity):
     inline.getparent().replace(inline, anchor)
 
 
-def _text_box(paragraph, line, x, y, width, identity, field):
-    chars = line["chars"]
-    size = chars[0]["size"]
-    font = {
-        "Times-Roman": "Times New Roman",
-        "Times-Bold": "Times New Roman",
-        "Helvetica": "Arial",
-        "Helvetica-Bold": "Arial",
-        "Courier": "Courier New",
-    }[field.font]
-    pict = OxmlElement("w:pict")
-    shape = etree.SubElement(pict, f"{{{V}}}rect", nsmap={"v": V, "o": O})
-    shape.set("id", f"ReportValue_{identity}")
-    shape.set("filled", "f")
-    shape.set("stroked", "f")
-    shape.set(
-        "style",
-        f"position:absolute;margin-left:{x:.3f}pt;margin-top:{y:.3f}pt;width:{width:.3f}pt;height:{size * 1.6:.3f}pt;z-index:1;mso-position-horizontal-relative:page;mso-position-vertical-relative:page",
-    )
-    textbox = etree.SubElement(shape, f"{{{V}}}textbox")
-    textbox.set("inset", "0,0,0,0")
-    content = OxmlElement("w:txbxContent")
-    p = OxmlElement("w:p")
-    properties = parse_xml(
-        f'<w:pPr {nsdecls("w")}><w:spacing w:before="0" w:after="0" w:line="{round(size * 20 * 1.15)}" w:lineRule="exact"/><w:jc w:val="left"/></w:pPr>'
-    )
-    p.append(properties)
-    run = OxmlElement("w:r")
+def _run_properties(field, size):
     formatting = OxmlElement("w:rPr")
     fonts = OxmlElement("w:rFonts")
     for key in ("ascii", "hAnsi", "eastAsia", "cs"):
-        fonts.set(qn("w:" + key), font)
+        fonts.set(qn("w:" + key), WORD_FONTS[field.font])
     formatting.append(fonts)
+    if "Bold" in field.font:
+        formatting.append(OxmlElement("w:b"))
+    color = OxmlElement("w:color")
+    color.set(qn("w:val"), field.color.lstrip("#"))
+    formatting.append(color)
     for tag in ("sz", "szCs"):
         element = OxmlElement("w:" + tag)
         element.set(qn("w:val"), str(round(size * 2)))
         formatting.append(element)
-    color = OxmlElement("w:color")
-    color.set(qn("w:val"), field.color.lstrip("#"))
-    formatting.append(color)
-    if "Bold" in field.font:
-        formatting.append(OxmlElement("w:b"))
-    run.append(formatting)
+    return formatting
+
+
+def _paragraph_properties(size, alignment):
+    return parse_xml(
+        f'<w:pPr {nsdecls("w")}><w:spacing w:before="0" w:after="0" w:line="{round(size * 20 * 1.15)}" w:lineRule="exact"/><w:jc w:val="{alignment}"/></w:pPr>'
+    )
+
+
+def _add_shape(paragraph, identity, x, y, width, height, content, extra_style=""):
+    pict = OxmlElement("w:pict")
+    shape = etree.SubElement(pict, f"{{{V}}}rect", nsmap={"v": V, "o": O})
+    shape.set("id", identity)
+    shape.set("filled", "f")
+    shape.set("stroked", "f")
+    shape.set(
+        "style",
+        f"position:absolute;margin-left:{x:.3f}pt;margin-top:{y:.3f}pt;width:{width:.3f}pt;height:{height:.3f}pt;z-index:1;mso-position-horizontal-relative:page;mso-position-vertical-relative:page{extra_style}",
+    )
+    textbox = etree.SubElement(shape, f"{{{V}}}textbox")
+    textbox.set("inset", "0,0,0,0")
+    box_content = OxmlElement("w:txbxContent")
+    box_content.append(content)
+    textbox.append(box_content)
+    paragraph.add_run()._r.append(pict)
+    return shape
+
+
+def _text_box(paragraph, line, x, y, width, identity, field):
+    size = line["chars"][0]["size"]
+    p = OxmlElement("w:p")
+    p.append(_paragraph_properties(size, "left"))
+    run = OxmlElement("w:r")
+    run.append(_run_properties(field, size))
     text = OxmlElement("w:t")
     text.set(qn("xml:space"), "preserve")
     text.text = line["text"]
     run.append(text)
     p.append(run)
-    content.append(p)
-    textbox.append(content)
-    paragraph.add_run()._r.append(pict)
+    _add_shape(paragraph, f"ReportValue_{identity}", x, y, width, size * 1.6, p)
 
 
-def generate_docx(blank_pdf, definition, report, images):
+def _empty_field_box(paragraph, field, page, identity):
+    """An invisible box to type in. Without the paragraph-mark formatting, typed text
+    would use the document's 1pt Normal style."""
+    width, height = field.width * page.width, field.height * page.height
+    size = max(4, min(field.font_size, height / 1.2))
+    p = OxmlElement("w:p")
+    properties = _paragraph_properties(size, field.alignment)
+    properties.append(_run_properties(field, size))
+    p.append(properties)
+    shape = _add_shape(
+        paragraph, f"EmptyField_{identity}", field.x * page.width, field.y * page.height,
+        width, height, p,
+        "" if field.kind == "textarea" else ";v-text-anchor:middle",
+    )
+    shape.set("alt", field.label)
+
+
+def generate_docx(blank_pdf, definition, report, images, empty_fields=False):
+    """With empty_fields, also add a box to type in for every field except photos and ticks."""
     # This also applies the same validation/auto-fit rules as PDF downloads.
     layers = generate_field_layers(definition, report, images)
     report = report.model_copy(update={"layout": {
@@ -203,6 +232,10 @@ def generate_docx(blank_pdf, definition, report, images):
                         identity,
                         styled,
                     )
+    if empty_fields:
+        typed = [field for field in definition.fields if field.kind not in {"image", "checkbox"}]
+        for identity, field in enumerate(typed, start=1):
+            _empty_field_box(page_paragraphs[field.page], field, definition.pages[field.page], identity)
     output = BytesIO()
     document.save(output)
     return output.getvalue()

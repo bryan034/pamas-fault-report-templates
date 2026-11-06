@@ -239,7 +239,9 @@ button, input, textarea, select { font: inherit; }
 @media (max-width:480px) { .login-page { padding:20px 16px; }.login-card { padding:28px 24px; border-radius:16px; }.login-card h1 { font-size:25px; } }
 .application-access-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem 1.2rem; padding: .55rem 1.5rem; background: #eef2ff; color: #172554; font-size: .85rem; border-bottom: 1px solid #c7d2fe; }
 .application-access-bar span { flex: 1; overflow-wrap: anywhere; }
-.application-access-bar a { font-weight: 600; text-decoration: underline; }
+.application-access-bar a, .application-access-bar button { font-weight: 600; text-decoration: underline; }
+.application-access-bar button { cursor: pointer; }
+.application-access-bar button:disabled { cursor: wait; opacity: .6; }
 .access-settings { max-width: 1000px; margin: auto; }
 .access-settings h1 { font-size: 1.8rem; margin: 1rem 0; }
 .access-settings p { margin: 1rem 0; overflow-wrap: anywhere; }

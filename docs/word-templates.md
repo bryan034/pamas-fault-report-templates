@@ -12,13 +12,12 @@ route is public. Cloudflare provisions its own private converter container; see
 [cloud deployment](cloudflare-deployment.md).
 
 Inputs are limited to 20 MB and 20 rendered pages. Fonts and Word-specific layout
-can affect pagination; review the converted preview. If necessary, upload a
-matching PDF exported from Word through **Word-exported PDF layout (optional)**
-before configuring fields. This replaces the current detection/layout; original
-DOCX bytes are retained. The application cannot verify the files match.
+can affect pagination; review the converted preview. If the layout is wrong, save
+the document as a PDF from Word and upload that PDF instead.
 
 Standalone Python can explicitly choose `WORD_CONVERSION_ENGINE=libreoffice`
-when LibreOffice Writer is installed. Its pagination can differ from ONLYOFFICE.
+when LibreOffice Writer is installed, as the [Windows app](windows-desktop.md) does.
+Its pagination can differ from ONLYOFFICE.
 Cloud and Compose explicitly select ONLYOFFICE and do not fall back on an outage.
 
 Temporary conversion sources are stored in PostgreSQL with 15-minute signed,
@@ -42,6 +41,10 @@ whole page returns an error instead of silently shrinking or clipping.
 Template geometry, defaults, covers, image crops, calculations, annotations and
 pinned revisions apply to both input formats. All sources/images must be included
 in database backups. Schema upgrades use [Alembic](database-migrations.md).
+
+A template page offers a blank PDF or a blank Word file. The Word file has the page
+as fixed artwork, plus an empty, invisible text box over each field to type in. Photo
+and tick fields have no box, and calculations do not run in Word.
 
 ## Verification
 

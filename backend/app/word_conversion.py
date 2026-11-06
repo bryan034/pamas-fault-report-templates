@@ -132,7 +132,7 @@ def docx_to_pdf(payload: bytes) -> bytes:
     )
     if not executable:
         raise ConverterUnavailable(
-            "Word conversion is unavailable. Rebuild the template-service Docker image (includes LibreOffice Writer)."
+            "Word upload is unavailable because LibreOffice was not found on this computer. Save the document as a PDF and upload that instead."
         )
     if not _conversion_slot.acquire(timeout=15):
         raise ValueError("Word converter is busy. Try again shortly.")
@@ -168,8 +168,11 @@ def docx_to_pdf(payload: bytes) -> bytes:
                     ],
                     stdin=subprocess.DEVNULL,
                     capture_output=True,
-                    timeout=60,
+                    # A desktop's first start builds a LibreOffice profile and can be slow.
+                    timeout=int(os.environ.get("WORD_CONVERSION_TIMEOUT_SECONDS", "60")),
                     check=False,
+                    # Windows: never flash a console window over the desktop app.
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
             except subprocess.TimeoutExpired as error:
                 raise ValueError(
@@ -177,7 +180,7 @@ def docx_to_pdf(payload: bytes) -> bytes:
                 ) from error
             except OSError as error:
                 raise ConverterUnavailable(
-                    "Word converter could not start. Check the service image and LIBREOFFICE_BINARY setting."
+                    "Word upload could not start LibreOffice. Save the document as a PDF and upload that instead."
                 ) from error
             target = work / "source.pdf"
             if (

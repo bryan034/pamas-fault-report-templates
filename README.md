@@ -94,6 +94,11 @@ lost if the browser tab reloads/closes or its process stops. Save drafts regular
 A rollback deploys a previous compatible release; no standby rollback container
 is required. See the cloud guide for recovery and rollout checks.
 
+## Windows desktop app
+
+`desktop/` packages the app as an offline Windows installer using SQLite and bundled
+LibreOffice, with no Docker or sign-in. See [Windows desktop app](docs/windows-desktop.md).
+
 ## Back up local data
 
 ```sh

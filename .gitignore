@@ -65,3 +65,8 @@ next-env.d.ts
 /test-results/
 /playwright-report/
 /tmp/pdfs/
+
+# Desktop build output. Contains customer templates: never commit or upload it.
+/desktop/.build/
+/desktop/node_modules/
+/desktop/dist/

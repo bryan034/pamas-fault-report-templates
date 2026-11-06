@@ -12,8 +12,10 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     create_engine,
+    event,
 )
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 from sqlalchemy.types import JSON
 from .deployment import is_cloud, validate_environment
@@ -207,7 +209,18 @@ def engine():
                 },
             )
         _engine = create_engine(url, **options)
+        if make_url(url).get_backend_name() == "sqlite":
+            event.listen(_engine, "connect", configure_sqlite)
     return _engine
+
+
+def configure_sqlite(connection, _record):
+    """Match PostgreSQL's foreign-key checks; wait for, rather than fail on, a busy writer."""
+    cursor = connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.execute("PRAGMA busy_timeout=30000")
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.close()
 
 
 def get_db():

@@ -107,7 +107,7 @@ def test_zip_expansion_limit(monkeypatch):
 def test_missing_converter_explained(monkeypatch):
     monkeypatch.delenv("LIBREOFFICE_BINARY", raising=False)
     monkeypatch.setattr(shutil, "which", lambda _: None)
-    with pytest.raises(ConverterUnavailable, match="Rebuild"):
+    with pytest.raises(ConverterUnavailable, match="Save the document as a PDF"):
         docx_to_pdf(sample_word())
 
 
@@ -276,6 +276,47 @@ def test_word_export_handles_images_shapes_calculations_and_blanks():
             == 2
         )
     assert generate_docx(blank, schema, TemplateReport(), {}).startswith(b"PK")
+
+
+def test_blank_word_has_an_empty_typing_box_for_each_typed_field(api):
+    schema = definition()
+    blank, _ = clean_pdf(sample_pdf(), schema)
+    typed = [field for field in schema.fields if field.kind not in {"image", "checkbox"}]
+    assert typed and len(typed) < len(schema.fields)  # The sample also has a photo field.
+    result = generate_docx(blank, schema, TemplateReport(values={field.id: "" for field in typed}), {}, empty_fields=True)
+    root, text = docx_text(result)
+    assert text.strip() == ""
+    namespaces = {
+        "w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+        "v": "urn:schemas-microsoft-com:vml",
+    }
+    shapes = root.findall(".//v:rect", namespaces)
+    assert [shape.get("alt") for shape in shapes] == [field.label for field in typed]
+    field, shape = typed[0], shapes[0]
+    page = schema.pages[field.page]
+    style = shape.get("style")
+    assert f"margin-left:{field.x * page.width:.3f}pt" in style
+    assert f"margin-top:{field.y * page.height:.3f}pt" in style
+    assert shape.get("filled") == "f" and shape.get("stroked") == "f"
+    # Typed text takes its formatting from the paragraph mark, not the 1pt Normal style.
+    size = shape.find(".//w:pPr/w:rPr/w:sz", namespaces).get(f"{{{namespaces['w']}}}val")
+    assert int(size) >= 8
+    w_alignment = shape.find(".//w:pPr/w:jc", namespaces).get(f"{{{namespaces['w']}}}val")
+    assert w_alignment == field.alignment
+
+
+def test_blank_word_download_ignores_defaults_and_follows_the_latest_revision(api):
+    schema = definition()
+    schema.fields[0].default_value = "Printed default"
+    base = create_shared(api, schema)
+    response = api.get(base + "/blank-word")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == DOCX_MIME
+    assert '-blank.docx"' in response.headers["content-disposition"]
+    root, text = docx_text(response.content)
+    assert "Printed default" not in text
+    assert root.xpath("//*[local-name()='rect']/@alt")[0] == schema.fields[0].label
+    assert api.get("/api/templates/missing/blank-word").status_code == 404
 
 
 @pytest.mark.skipif(

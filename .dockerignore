@@ -29,3 +29,6 @@ backend/.uv-cache
 backend/.uv-tool
 public/ocr
 public/pdf.worker.min.mjs
+desktop/.build
+desktop/node_modules
+desktop/dist

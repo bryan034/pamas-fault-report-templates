@@ -733,6 +733,20 @@ def background(
     return Response(revision.blank_pdf, media_type="application/pdf")
 
 
+@app.get("/api/templates/{template_id}/blank-word")
+def blank_word(template_id: str, db: Session = Depends(get_db)):
+    template = template_or_404(db, template_id)
+    if onlyoffice.native(template):
+        raise HTTPException(409, "Open the template to restore its overlay background first")
+    revision = versions.resolve(db, template, None)
+    db.commit()
+    definition = TemplateDefinition.model_validate(revision.definition)
+    # Explicit empty values, because omitted fields would print their template defaults.
+    values = {field.id: "" for field in definition.fields if field.kind not in {"image", "checkbox"}}
+    payload = generate_docx(revision.blank_pdf, definition, TemplateReport(title=template.title, values=values), {}, empty_fields=True)
+    return document_response(payload, "docx", f"{template.title}-blank")
+
+
 @app.get("/api/templates/{template_id}/drafts")
 def drafts(template_id: str, db: Session = Depends(get_db)):
     template = template_or_404(db, template_id)

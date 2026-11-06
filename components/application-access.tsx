@@ -4,6 +4,7 @@ import { createContext, useContext, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { templateApiBase, templateJson, TemplateRequestError } from "@/lib/template-api";
 import { LoginScreen } from "@/components/login-screen";
+import { DesktopBackup } from "@/components/desktop-backup";
 
 type Identity = {
   mode: "local" | "google";
@@ -79,8 +80,10 @@ export function ApplicationAccess({ children }: { children: React.ReactNode }) {
         <>
           <div className="application-access-bar" aria-label="Application access">
             <a href="/">Report Formatter</a>
-            <span>{user.mode === "local" ? "Local development — no login" : `${user.email} · ${user.role}`}</span>
-            {(canManage || user.mode === "local") && <a href="/access">Manage access</a>}
+            {window.reportFormatterDesktop ? <DesktopBackup /> : <>
+              <span>{user.mode === "local" ? "Local development — no login" : `${user.email} · ${user.role}`}</span>
+              {(canManage || user.mode === "local") && <a href="/access">Manage access</a>}
+            </>}
             {user.mode === "google" && <button type="button" onClick={async () => {
               try {
                 await templateJson("/api/auth/logout", {method: "POST"});

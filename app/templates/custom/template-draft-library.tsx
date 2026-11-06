@@ -173,14 +173,17 @@ export default function TemplateDraftLibrary({
       setBusy(false);
     }
   };
-  const download = async (kind: "background") => {
+  const downloadBlank = async (format: "pdf" | "docx") => {
     try {
-      if (template?.editor_kind === "native-docx")
-        setTemplate(await templateJson<TemplateDetail>(`${base}/restore-overlay`, { method: "POST" }));
-      const response = await templateRequest(`${base}/${kind}`);
+      let current = template;
+      if (current?.editor_kind === "native-docx") {
+        current = await templateJson<TemplateDetail>(`${base}/restore-overlay`, { method: "POST" });
+        setTemplate(current);
+      }
+      const response = await templateRequest(`${base}/${format === "pdf" ? "background" : "blank-word"}`);
       downloadBlob(
         await response.blob(),
-        `${template?.title || "template"}-blank.pdf`,
+        `${current?.title || "template"}-blank.${format}`,
       );
     } catch (cause) {
       setNotice(cause instanceof Error ? cause.message : "Download failed");
@@ -250,9 +253,16 @@ export default function TemplateDraftLibrary({
           <Button
             variant="outline"
             size="sm"
-            onClick={() => void download("background")}
+            onClick={() => void downloadBlank("pdf")}
           >
             Download blank PDF
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void downloadBlank("docx")}
+          >
+            Download blank Word
           </Button>
           {canEdit && !template?.archived && (
             <>

@@ -24,7 +24,15 @@ const eslintConfig = defineConfig([
     "test-results/**",
     "playwright-report/**",
     "vendor/**",
+    "desktop/.build/**",
+    "desktop/dist/**",
+    "desktop/node_modules/**",
   ]),
+  {
+    // Electron's main and preload entry points are CommonJS.
+    files: ["desktop/*.cjs"],
+    rules: { "@typescript-eslint/no-require-imports": "off" },
+  },
   {
     files: ["components/ui/**/*.{ts,tsx}"],
     rules: {
