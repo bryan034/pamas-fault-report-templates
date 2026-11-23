@@ -162,7 +162,6 @@ button, input, textarea, select { font: inherit; }
 .report-resize-handle,.report-shape-delete { visibility:hidden; pointer-events:none; }
 .report-field-area:hover > .report-resize-handle,.report-field-area.selected > .report-resize-handle,.report-shape-area:hover > .report-resize-handle,.report-shape-area.selected > .report-resize-handle,.report-shape-area:hover > .report-shape-delete,.report-shape-area.selected > .report-shape-delete { visibility:visible; pointer-events:all; }
 .report-shape-delete { cursor:pointer; }
-.report-preview-heading { z-index:8; }
 .report-preview-tools { position:sticky; top:0; z-index:20; background:#e9edf4; margin-bottom:8px; display:flex; flex-wrap:nowrap; align-items:center; gap:8px; min-width:0; max-width:100%; padding:6px 0; overflow-x:auto; }
 .report-shape-toolbar { display:flex; flex:none; align-items:center; gap:4px; }
 .report-preview-tools .report-font-toolbar { display:flex; flex:none; flex-wrap:nowrap; align-items:center; gap:8px; padding:0; border:0; background:transparent; }
@@ -172,9 +171,7 @@ button, input, textarea, select { font: inherit; }
 .report-preview-tools input[aria-label="Report font size"] { width:50px; height:30px; padding:3px 5px; font-size:11px; }
 .report-preview-tools input[type="color"] { width:28px; height:28px; padding:2px; }
 .report-preview-tools input[type="range"] { width:70px; }
-.report-preview-tools .report-preview-heading { position:static; }
 .report-preview-tools .report-font-toolbar { margin-bottom:0; }
-.template-default-layer { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
 @media (max-width:760px) { .report-preview-tools { top:var(--report-header-height, 0px); } }
 .interactive-report-preview { position:relative; }
 .drawing .report-field-hit,.drawing .report-shape-hit { pointer-events:none; }

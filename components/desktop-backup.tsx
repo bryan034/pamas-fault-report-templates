@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 type BackupOutcome = { status: "saved" | "restored" | "cancelled" | "failed"; message?: string; lastBackupAt?: string | null };
 
 /** Provided by desktop/preload.cjs in the Windows app; absent in web deployments. */
-export type DesktopBridge = {
+type DesktopBridge = {
   lastBackupAt(): Promise<string | null>;
   backup(): Promise<BackupOutcome>;
   restore(): Promise<BackupOutcome>;

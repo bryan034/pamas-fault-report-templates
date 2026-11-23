@@ -1,11 +1,11 @@
 import type { Definition, PageBox, TemplateField } from "./template-api.ts";
 
 export type BxLabel = "BX1" | "BX2" | "BX3";
-export type BxReadings = {
+type BxReadings = {
   values: Partial<Record<BxLabel, string>>;
   ambiguous: BxLabel[];
 };
-export type OcrWord = {
+type OcrWord = {
   text: string;
   confidence: number;
   bbox: { x0: number; y0: number; x1: number; y1: number };
@@ -81,7 +81,7 @@ export function mergeBxReadings(results: BxReadings[]): BxReadings {
   return { values, ambiguous: [...ambiguous] };
 }
 
-export function fieldBxLabel(field: TemplateField): BxLabel | null {
+function fieldBxLabel(field: TemplateField): BxLabel | null {
   if (!["text", "textarea", "number"].includes(field.kind)) return null;
   const matches = [...field.label.matchAll(labelPattern())];
   const unique = new Set(matches.map(match => `BX${/^[il]$/i.test(match[1]) ? "1" : match[1]}` as BxLabel));

@@ -1,6 +1,6 @@
 import type { Definition, TemplateReport } from "./template-api";
 
-export type CalculationProblem = { message: string; fieldIds: string[] };
+type CalculationProblem = { message: string; fieldIds: string[] };
 export function calculationProblems(
   definition: Definition,
   values?: TemplateReport["values"],

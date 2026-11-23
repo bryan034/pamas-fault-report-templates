@@ -19,9 +19,7 @@ export default function EditorGate({
   if (access.user?.role === "viewer" && draftId)
     return <TemplateEngineGate templateId={templateId} draftId={draftId}><ReadOnlyReport templateId={templateId} draftId={draftId} /></TemplateEngineGate>;
   if (!access.canEdit)
-    return access.user?.role === "viewer" && draftId ? (
-      <ReadOnlyReport templateId={templateId} draftId={draftId} />
-    ) : (
+    return (
       <p role="alert" className="list-state">
         {access.error || "Editor access is required to create a report."}
       </p>

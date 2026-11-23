@@ -50,6 +50,10 @@ from . import google_auth
 from . import onlyoffice
 
 
+ReportFormat = Literal["pdf", "docx", "original"]
+RenderMode = Literal[ReportFormat, "preview-pdf", "preview-layers"]
+
+
 async def cleanup_deleted_drafts():
     while True:
         await asyncio.sleep(draft_trash.CLEANUP_INTERVAL_SECONDS)
@@ -480,8 +484,8 @@ def save_report_defaults(
 @app.get("/api/templates/{template_id}/drafts/{draft_id}/pdf")
 @app.get("/api/templates/{template_id}/drafts/{draft_id}/download")
 async def download_draft_pdf(
-    template_id: str, draft_id: str, request: Request, db: Session = Depends(get_db),
-    output_format: Literal["pdf", "docx", "original"] = Query("pdf", alias="format"),
+    template_id: str, draft_id: str, db: Session = Depends(get_db),
+    output_format: ReportFormat = Query("pdf", alias="format"),
 ):
     template = template_or_404(db, template_id)
     draft = draft_or_404(db, template_id, draft_id)
@@ -937,18 +941,17 @@ def delete_draft(template_id: str, draft_id: str, db: Session = Depends(get_db))
     return Response(status_code=204)
 
 
-async def render(
-    template_id,
-    report_json,
-    images,
-    image_fields,
-    db,
-    download,
-    revision_id=None,
-    asset_token=None,
-    layered=False,
-    output_format="pdf",
-):
+async def _render_report(
+    template_id: str,
+    report_json: str,
+    images: list[UploadFile],
+    image_fields: str,
+    db: Session,
+    *,
+    mode: RenderMode,
+    revision_id: str,
+    asset_token: str = "",
+) -> Response:
     template = template_or_404(db, template_id)
     if onlyoffice.native(template):
         raise HTTPException(409, "Restore this template to the field-box editor first")
@@ -958,32 +961,35 @@ async def render(
     report = parse(TemplateReport, report_json)
     try:
         report.validate_for(definition)
-        values = resolved_values(definition, report)
+        resolved_values(definition, report)
     except (ValueError, TypeError) as error:
         raise HTTPException(422, str(error)) from error
     uploaded = await image_uploads(definition, images, image_fields)
-    kind = source_info(db, revision)["source_format"] if output_format == "original" else output_format
-    if asset_token and not download:
+    is_preview = mode in ("preview-pdf", "preview-layers")
+    kind = "pdf" if is_preview else mode
+    if kind == "original":
+        kind = source_info(db, revision)["source_format"]
+    if is_preview and asset_token:
         if uploaded:
             raise HTTPException(422, "Use cached or uploaded preview images, not both")
         uploaded = preview_assets.get(asset_token, template_id, revision.id)
     try:
-        if layered:
-            result = await run_in_threadpool(generate_field_layers, definition, report, {key: item[0] for key, item in uploaded.items()})
-            return JSONResponse(result, headers={"Cache-Control":"no-store"})
+        image_data = {key: item[0] for key, item in uploaded.items()}
+        if mode == "preview-layers":
+            result = await run_in_threadpool(generate_field_layers, definition, report, image_data)
+            return JSONResponse(result, headers={"Cache-Control": "no-store"})
         payload = await run_in_threadpool(
             generate_docx if kind == "docx" else generate_pdf,
             revision.blank_pdf,
             definition,
             report,
-            {key: item[0] for key, item in uploaded.items()},
+            image_data,
         )
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
-    headers = {"Cache-Control": "no-store"}
-    if download:
+    if not is_preview:
         return document_response(payload, kind, report.title)
-    return Response(payload, media_type="application/pdf", headers=headers)
+    return Response(payload, media_type="application/pdf", headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/templates/{template_id}/preview")
@@ -997,16 +1003,15 @@ async def preview(
     layered: bool = Form(False),
     db: Session = Depends(get_db),
 ):
-    return await render(
+    return await _render_report(
         template_id,
         report_json,
         images,
         image_fields,
         db,
-        False,
-        revision_id,
-        asset_token,
-        layered,
+        mode="preview-layers" if layered else "preview-pdf",
+        revision_id=revision_id,
+        asset_token=asset_token,
     )
 
 
@@ -1033,9 +1038,9 @@ async def generate(
     image_fields: str = Form("[]"),
     revision_id: str = Form(""),
     db: Session = Depends(get_db),
-    output_format: Literal["pdf", "docx", "original"] = Query("pdf", alias="format"),
+    output_format: ReportFormat = Query("pdf", alias="format"),
 ):
-    return await render(
-        template_id, report_json, images, image_fields, db, True, revision_id,
-        output_format=output_format,
+    return await _render_report(
+        template_id, report_json, images, image_fields, db,
+        mode=output_format, revision_id=revision_id,
     )

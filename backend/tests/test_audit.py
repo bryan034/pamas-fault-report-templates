@@ -73,6 +73,25 @@ def test_report_json_validation(api, path, payload):
     assert result.status_code == expected
 
 
+def test_preview_reports_invalid_calculation_before_invalid_image(api):
+    definition = samples.definition().model_dump()
+    definition["fields"].append({
+        **definition["fields"][3],
+        "id": "total",
+        "label": "Total",
+        "kind": "calculated",
+        "calculation": {"operation": "sum", "fields": ["company"]},
+    })
+    base = create_shared(api, TemplateDefinition.model_validate(definition))
+    result = api.post(
+        base + "/preview",
+        data={"report_json": '{"values":{"company":"text"}}', "image_fields": '["photo"]'},
+        files={"images": ("invalid.png", b"invalid", "image/png")},
+    )
+    assert result.status_code == 422
+    assert result.json() == {"detail": "Total: source values must be finite numbers"}
+
+
 @pytest.mark.parametrize(
     "format,status", [("GIF", 415), ("JPEG", 200), ("PNG", 200), ("WEBP", 200)]
 )
@@ -377,7 +396,6 @@ def test_pdf_page_validation_and_render_variants():
         background, model, form, {"photo": image_bytes()}
     )
     assert len(PdfReader(BytesIO(result)).pages) == 2
-    template_pdf._wrap("x" * 100, "Helvetica", 12, 10)
 
 
 def test_rendering_error_responses_and_calculation_arity(api, monkeypatch):

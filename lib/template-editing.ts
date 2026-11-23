@@ -138,6 +138,39 @@ export type Edge = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
 export const edges: Edge[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 const clamp = (n: number, min: number, max: number) =>
   Math.min(max, Math.max(min, n));
+
+export type Point = Pick<Region, "x" | "y">;
+
+export function pointOnPage(event: {
+  currentTarget: SVGElement;
+  clientX: number;
+  clientY: number;
+}) {
+  const svg = event.currentTarget.closest("svg")!;
+  const bounds = svg.getBoundingClientRect();
+  return {
+    svg,
+    x: clamp((event.clientX - bounds.left) / bounds.width, 0, 1),
+    y: clamp((event.clientY - bounds.top) / bounds.height, 0, 1),
+  };
+}
+
+export function drawBox(start: Point, end: Point): Region {
+  return {
+    x: Math.min(start.x, end.x, 0.998),
+    y: Math.min(start.y, end.y, 0.998),
+    width: Math.max(0.002, Math.abs(end.x - start.x)),
+    height: Math.max(0.002, Math.abs(end.y - start.y)),
+  };
+}
+
+export function clampBoxPosition(box: Region, x: number, y: number): Point {
+  return {
+    x: clamp(x, 0, 1 - box.width),
+    y: clamp(y, 0, 1 - box.height),
+  };
+}
+
 export function resizeBox(
   box: PageBox,
   edge: Edge,

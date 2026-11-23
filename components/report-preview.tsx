@@ -23,18 +23,23 @@ import type {
 import {
   edges,
   handlePoint,
+  pointOnPage,
+  drawBox,
+  clampBoxPosition,
   resizeBox,
   tickPath,
   nextReportField,
   type Edge,
+  type Point,
 } from "@/lib/template-editing";
 import { extractionMime } from "@/components/image-extraction";
 import { fontSizes } from "@/lib/font-sizes";
 import { calculateValues } from "@/lib/template-api";
 import { fitReportText } from "@/lib/report-text";
 import { createId } from "@/lib/create-id";
+import { loadPdf } from "@/lib/template-pdf";
 
-export const reportFonts = [
+const reportFonts = [
   ["Times-Roman", "Times New Roman"],
   ["Times-Bold", "Times New Roman Bold"],
   ["Helvetica", "Arial"],
@@ -85,14 +90,11 @@ function LiveText({ text, field, width, height }: { text: string; field: Templat
 type Gesture = {
   kind: "field" | "shape" | "draw";
   id: string;
-  start: { x: number; y: number };
+  start: Point;
   box: PageBox;
   edge?: Edge;
-  shape?: Rectangle;
   moved?: boolean;
 };
-const clamp = (n: number, min: number, max: number) =>
-  Math.max(min, Math.min(max, n));
 const defaultTickSize = { width: 0.035, height: 0.025 };
 
 export default function ReportPreview({
@@ -234,7 +236,7 @@ export default function ReportPreview({
   useEffect(() => {
     if (!layers) return;
     let cancelled = false;
-    let task: { destroy: () => Promise<void> } | undefined;
+    let loading: ReturnType<typeof loadPdf> | undefined;
     const renders: { cancel: () => void }[] = [];
     void (async () => {
       setRendering(true);
@@ -244,11 +246,8 @@ export default function ReportPreview({
           if (!cancelled) setTextures([]);
           return;
         }
-        const { getDocument, GlobalWorkerOptions } = await import("pdfjs-dist");
-        GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
         const bytes = Uint8Array.from(atob(layers.pdf), (c) => c.charCodeAt(0));
-        const loading = getDocument({ data: bytes });
-        task = loading;
+        loading = loadPdf(bytes);
         const pdf = await loading.promise;
         if (pdf.numPages !== layers.fields.length)
           throw new Error("Field preview pages do not match");
@@ -284,13 +283,13 @@ export default function ReportPreview({
           );
       } finally {
         if (!cancelled) setRendering(false);
-        void task?.destroy().catch(() => undefined);
+        void loading?.destroy().catch(() => undefined);
       }
     })();
     return () => {
       cancelled = true;
       renders.forEach((render) => render.cancel());
-      void task?.destroy().catch(() => undefined);
+      void loading?.destroy().catch(() => undefined);
     };
   }, [layers]);
   const removeShape = (id: string) => {
@@ -323,15 +322,6 @@ export default function ReportPreview({
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   });
-  const point = (event: PointerEvent<SVGElement>) => {
-    const svg = event.currentTarget.closest("svg")!;
-    const rect = svg.getBoundingClientRect();
-    return {
-      svg,
-      x: clamp((event.clientX - rect.left) / rect.width, 0, 1),
-      y: clamp((event.clientY - rect.top) / rect.height, 0, 1),
-    };
-  };
   const beginField = (
     event: PointerEvent<SVGElement>,
     item: TemplateField,
@@ -339,7 +329,7 @@ export default function ReportPreview({
   ) => {
     event.preventDefault();
     event.stopPropagation();
-    const p = point(event);
+    const p = pointOnPage(event);
     p.svg.setPointerCapture(event.pointerId);
     setSelected(null);
     activate(item.id);
@@ -360,7 +350,7 @@ export default function ReportPreview({
   ) => {
     event.preventDefault();
     event.stopPropagation();
-    const p = point(event);
+    const p = pointOnPage(event);
     setEditing(null);
     activate(null);
     if (shape) {
@@ -376,7 +366,6 @@ export default function ReportPreview({
         start: p,
         box,
         edge,
-        shape,
       };
     } else {
       if (report.rectangles.length >= 100) return;
@@ -416,7 +405,6 @@ export default function ReportPreview({
           width: next.width,
           height: next.height,
         },
-        shape: next,
       };
     }
     onDragState?.(true);
@@ -424,7 +412,7 @@ export default function ReportPreview({
   const move = (event: PointerEvent<SVGSVGElement>) => {
     const current = gesture.current;
     if (!current) return;
-    const p = point(event),
+    const p = pointOnPage(event),
       dx = p.x - current.start.x,
       dy = p.y - current.start.y;
     if (current.kind === "field" && !current.edge && !current.moved) {
@@ -435,19 +423,12 @@ export default function ReportPreview({
     if (current.kind === "field") setEditing(null);
     const next =
       current.kind === "draw"
-        ? {
-            page: current.box.page,
-            x: Math.min(current.start.x, p.x, 0.998),
-            y: Math.min(current.start.y, p.y, 0.998),
-            width: Math.max(0.002, Math.abs(dx)),
-            height: Math.max(0.002, Math.abs(dy)),
-          }
+        ? { page: current.box.page, ...drawBox(current.start, p) }
         : current.edge
           ? resizeBox(current.box, current.edge, dx, dy)
           : {
               ...current.box,
-              x: clamp(current.box.x + dx, 0, 1 - current.box.width),
-              y: clamp(current.box.y + dy, 0, 1 - current.box.height),
+              ...clampBoxPosition(current.box, current.box.x + dx, current.box.y + dy),
             };
     onChange((value) =>
       current.kind === "field"

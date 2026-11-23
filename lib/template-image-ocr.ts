@@ -3,6 +3,7 @@ import type { PageBox, Region, TemplateField } from "./template-api";
 import { createId } from "./create-id";
 import { templateJson } from "./template-api";
 import { bxTextInReadingOrder, extractBxReadings, mergeBxReadings } from "./bx-extraction";
+import { loadPdf } from "./template-pdf";
 
 const localWorker = () =>
   createWorker("eng", 1, {
@@ -62,9 +63,8 @@ export async function pdfRegionImage(
   source: Uint8Array,
   box: PageBox,
 ): Promise<File> {
-  const { getDocument, GlobalWorkerOptions } = await import("pdfjs-dist");
-  GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
-  const pdf = await getDocument({ data: source.slice() }).promise;
+  const loading = loadPdf(source.slice());
+  const pdf = await loading.promise;
   try {
     const page = await pdf.getPage(box.page + 1),
       size = page.getViewport({ scale: 1 }),
@@ -104,7 +104,7 @@ export async function pdfRegionImage(
     );
     return new File([blob], "template-photo.png", { type: "image/png" });
   } finally {
-    await pdf.destroy();
+    await loading.destroy();
   }
 }
 
@@ -113,9 +113,8 @@ export async function detectScannedPage(
   source: Uint8Array,
   pageNumber: number,
 ): Promise<TemplateField[]> {
-  const { getDocument, GlobalWorkerOptions } = await import("pdfjs-dist");
-  GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
-  const pdf = await getDocument({ data: source.slice() }).promise;
+  const loading = loadPdf(source.slice());
+  const pdf = await loading.promise;
   let worker: Awaited<ReturnType<typeof createWorker>> | undefined;
   try {
     const page = await pdf.getPage(pageNumber + 1);
@@ -394,7 +393,7 @@ export async function detectScannedPage(
     return [...layout.fields, ...inferred].slice(0, 300);
   } finally {
     await worker?.terminate();
-    await pdf.destroy();
+    await loading.destroy();
   }
 }
 

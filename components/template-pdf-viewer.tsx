@@ -6,6 +6,8 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { loadPdf } from "@/lib/template-pdf";
+
 type RenderedPage = {
   width: number;
   height: number;
@@ -67,24 +69,15 @@ export default function TemplatePdfViewer({
   }, []);
   useEffect(() => {
     if (!source) return;
-    let cancelled = false,
-      loading: { destroy: () => Promise<void> } | undefined;
+    let cancelled = false;
+    let loading: ReturnType<typeof loadPdf> | undefined;
     const tasks: { cancel: () => void }[] = [];
     void (async () => {
       setBusy(true);
       setError("");
       try {
-        const { getDocument, GlobalWorkerOptions } = await import("pdfjs-dist");
-        GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
-        const task = getDocument(
-          typeof source === "string"
-            // PDF.js fetches URLs itself, outside our credentialed API helper.
-            // Local UI/API ports are different origins, so opt in to cookies.
-            ? { url: source, withCredentials: true }
-            : { data: source.slice() },
-        );
-        loading = task;
-        const pdf = await task.promise,
+        loading = loadPdf(typeof source === "string" ? source : source.slice());
+        const pdf = await loading.promise,
           next: RenderedPage[] = [];
         for (let index = 1; index <= pdf.numPages; index++) {
           if (cancelled) return;

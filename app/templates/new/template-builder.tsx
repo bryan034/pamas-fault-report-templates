@@ -31,32 +31,33 @@ import { useEditHistory } from "@/lib/use-edit-history";
 import {
   edges,
   handlePoint,
+  pointOnPage,
+  drawBox,
+  clampBoxPosition,
   resizeBox,
   duplicateBox,
   selectionBoxes,
   moveBoxes,
   firstEditableField,
+  type BoxSelection,
   type CopiedBox,
   type Edge,
+  type Point,
 } from "@/lib/template-editing";
 import { fontSizes } from "@/lib/font-sizes";
 import TemplateEditor from "@/app/templates/custom/template-editor";
 import { calculationProblems } from "@/lib/template-calculations";
 import { createId } from "@/lib/create-id";
 
-type Selection = { kind: "field" | "cover"; id: string };
 type DocumentState = { title: string; definition: Definition };
 type Gesture = {
-  page: number;
-  start: { x: number; y: number };
-  selection: Selection;
+  start: Point;
+  selection: BoxSelection;
   origin: PageBox;
   action: "draw" | "move" | Edge;
   recorded: boolean;
   group?: CopiedBox[];
 };
-const clamp = (n: number, min: number, max: number) =>
-  Math.min(max, Math.max(min, n));
 function openSavedTemplate(id: string) {
   // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- Full navigation avoids this project's Vinext Link runtime mismatch.
   window.location.assign(`/templates/custom/${id}`);
@@ -96,9 +97,9 @@ export default function TemplateBuilder({
   const [file, setFile] = useState<File | null>(null),
     [busy, setBusy] = useState(""),
     [error, setError] = useState("");
-  const [selections, setSelections] = useState<Selection[]>([]);
+  const [selections, setSelections] = useState<BoxSelection[]>([]);
   const selected = selections.at(-1) || null;
-  const setSelected = (selection: Selection | null) => setSelections(selection ? [selection] : []);
+  const setSelected = (selection: BoxSelection | null) => setSelections(selection ? [selection] : []);
   const [mode, setMode] = useState<"input" | "image" | "cover" | null>(null);
   const [coverOnly, setCoverOnly] = useState(false),
     [dirty, setDirty] = useState(false);
@@ -364,7 +365,7 @@ export default function TemplateBuilder({
     }));
   };
   const updateBox = (
-    selection: Selection,
+    selection: BoxSelection,
     updates: Partial<PageBox>,
     record = true,
   ) =>
@@ -516,10 +517,7 @@ export default function TemplateBuilder({
           selected,
           event.altKey
             ? resizeBox(selectedBox, "se", dx, dy)
-            : {
-                x: clamp(selectedBox.x + dx, 0, 1 - selectedBox.width),
-                y: clamp(selectedBox.y + dy, 0, 1 - selectedBox.height),
-              },
+            : clampBoxPosition(selectedBox, selectedBox.x + dx, selectedBox.y + dy),
         );
       }
     };
@@ -687,24 +685,15 @@ export default function TemplateBuilder({
       setBusy("");
     }
   };
-  const point = (event: PointerEvent<SVGElement>) => {
-    const svg = event.currentTarget.closest("svg") as SVGSVGElement,
-      bounds = svg.getBoundingClientRect();
-    return {
-      svg,
-      x: clamp((event.clientX - bounds.left) / bounds.width, 0, 1),
-      y: clamp((event.clientY - bounds.top) / bounds.height, 0, 1),
-    };
-  };
   const start = (
     event: PointerEvent<SVGElement>,
     page: number,
-    selection?: Selection,
+    selection?: BoxSelection,
     edge?: Edge,
   ) => {
     if (busy || !definition) return;
     event.stopPropagation();
-    const p = point(event);
+    const p = pointOnPage(event);
     p.svg.setPointerCapture(event.pointerId);
     if (selection && !mode) {
       const box = (
@@ -725,7 +714,6 @@ export default function TemplateBuilder({
       if (selection.kind === "field" && "kind" in box && box.kind === "image")
         setExtractionImage(box.id);
       drag.current = {
-        page,
         start: p,
         selection,
         origin: box,
@@ -754,7 +742,7 @@ export default function TemplateBuilder({
         width: 0.002,
         height: 0.002,
       };
-    const next: Selection = { kind: mode === "cover" ? "cover" : "field", id };
+    const next: BoxSelection = { kind: mode === "cover" ? "cover" : "field", id };
     if (mode === "image") setExtractionImage(id);
     change((current) =>
       mode === "cover"
@@ -785,7 +773,6 @@ export default function TemplateBuilder({
     );
     setSelected(next);
     drag.current = {
-      page,
       start: p,
       selection: next,
       origin: box,
@@ -796,7 +783,7 @@ export default function TemplateBuilder({
   const move = (event: PointerEvent<SVGSVGElement>) => {
     const gesture = drag.current;
     if (!gesture) return;
-    const p = point(event),
+    const p = pointOnPage(event),
       box = gesture.origin;
     if (gesture.action === "move" && gesture.group && gesture.group.length > 1) {
       change(current => moveBoxes(current, gesture.group!, p.x - gesture.start.x, p.y - gesture.start.y), !gesture.recorded);
@@ -805,17 +792,13 @@ export default function TemplateBuilder({
     }
     const updates =
       gesture.action === "draw"
-        ? {
-            x: Math.min(gesture.start.x, p.x, 0.998),
-            y: Math.min(gesture.start.y, p.y, 0.998),
-            width: Math.max(0.002, Math.abs(p.x - gesture.start.x)),
-            height: Math.max(0.002, Math.abs(p.y - gesture.start.y)),
-          }
+        ? drawBox(gesture.start, p)
         : gesture.action === "move"
-          ? {
-              x: clamp(box.x + p.x - gesture.start.x, 0, 1 - box.width),
-              y: clamp(box.y + p.y - gesture.start.y, 0, 1 - box.height),
-            }
+          ? clampBoxPosition(
+              box,
+              box.x + p.x - gesture.start.x,
+              box.y + p.y - gesture.start.y,
+            )
           : resizeBox(
               box,
               gesture.action,

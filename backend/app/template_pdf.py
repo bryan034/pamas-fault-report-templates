@@ -423,27 +423,6 @@ def clean_pdf(payload: bytes, definition: TemplateDefinition) -> tuple[bytes, by
     return output.getvalue(), thumbnail
 
 
-def _wrap(text, font, size, width):
-    lines = []
-    for paragraph in text.split("\n"):
-        line = ""
-        for word in paragraph.split():
-            candidate = f"{line}{word}".strip()
-            if line and pdfmetrics.stringWidth(candidate, font, size) > width:
-                lines.append(line)
-                line = ""
-            # Split a single long token so it cannot bleed beyond its field.
-            for char in word:
-                if pdfmetrics.stringWidth(line + char, font, size) > width and line:
-                    lines.append(line)
-                    line = ""
-                line += char
-            line += " "
-        lines.append(line.rstrip())
-    return lines
-
-
-
 def _display_value(field, values):
     value = str(values.get(field.id, ""))
     if field.kind == "date" and value:
@@ -452,7 +431,7 @@ def _display_value(field, values):
     return value
 
 
-def report_field_box(field, box, page, report, values):
+def _page_box(box: PageBox) -> PageBox:
     """Keep saved field geometry; report text fits inside this box."""
     return PageBox(page=box.page, x=box.x, y=box.y, width=box.width, height=box.height)
 
@@ -553,7 +532,7 @@ def generate_pdf(
     fields_by_page = [[] for _ in definition.pages]
     for field in definition.fields:
         box = report.layout.get(field.id, field)
-        box = report_field_box(field, box, definition.pages[box.page], report, values)
+        box = _page_box(box)
         fields_by_page[box.page].append((field, box))
     shapes_by_page = [[] for _ in definition.pages]
     for shape in report.rectangles:
@@ -602,7 +581,6 @@ def generate_pdf(
 def generate_field_layers(definition, report, images):
     """Small transparent PDF pages for each populated field, with no template pixels."""
     import base64
-    from .template_models import PageBox, PageSize
     report.validate_for(definition)
     values = resolved_values(definition, report)
     buffer = BytesIO()
@@ -613,8 +591,7 @@ def generate_field_layers(definition, report, images):
     for field in definition.fields:
         box = report.layout.get(field.id, field)
         page = definition.pages[box.page]
-        box = report_field_box(field, box, page, report, values)
-        style = report.styles.get(field.id)
+        box = _page_box(box)
         if field.kind not in {"image", "checkbox"}:
             layout[field.id] = box.model_dump(mode="json")
         if not (field.id in images if field.kind == "image" else values.get(field.id)):
