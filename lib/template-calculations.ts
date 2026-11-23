@@ -16,17 +16,17 @@ export function calculationProblems(
       !calc ||
       refs.length === 0 ||
       (calc.operation !== "sum" && refs.length !== 2) ||
-      refs.some((id) => fields.get(id)?.kind !== "number")
+      refs.some((id) => !["number", "text", "textarea"].includes(fields.get(id)?.kind || ""))
     ) {
       problems.push({
-        message: `${field.label}: choose valid source number fields${refs.length ? ` (check ${refs.map((id) => fields.get(id)?.label || id || "unselected source").join(", ")})` : " for both operands"}.`,
+        message: `${field.label}: choose valid source number or text fields${refs.length ? ` (check ${refs.map((id) => fields.get(id)?.label || id || "unselected source").join(", ")})` : " for both operands"}.`,
         fieldIds: involved,
       });
       continue;
     }
     if (
       !values ||
-      refs.some((id) => values[id] === undefined || values[id] === "")
+      refs.some((id) => values[id] === undefined || values[id] === "" || values[id] === "-")
     )
       continue;
     const numbers = refs.map((id) => Number(values[id]));

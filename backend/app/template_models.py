@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, time
+import math
 from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -145,15 +146,15 @@ class TemplateDefinition(BaseModel):
             if field.kind == "calculated":
                 calc = field.calculation
                 if not calc or any(
-                    ref not in fields or fields[ref].kind != "number"
+                    ref not in fields or fields[ref].kind not in {"number", "text", "textarea"}
                     for ref in calc.fields
                 ):
                     raise ValueError(
-                        f"{field.label}: calculations must reference existing number fields; check {', '.join(calc.fields) if calc else 'both source fields'}"
+                        f"{field.label}: calculations must reference existing number or text fields; check {', '.join(calc.fields) if calc else 'both source fields'}"
                     )
                 if calc.operation != "sum" and len(calc.fields) != 2:
                     raise ValueError(
-                        f"{field.label}: difference and percentage require two source number fields"
+                        f"{field.label}: difference and percentage require two source number or text fields"
                     )
         targets = set()
         validate_extractions(self.extractions, fields)
@@ -229,7 +230,7 @@ class TemplateReport(BaseModel):
                 raise ValueError(
                     f"{field.label} must be text of at most 20000 characters"
                 )
-            if value and field.kind == "number" and not math.isfinite(float(value)):
+            if value and value != "-" and field.kind == "number" and not math.isfinite(float(value)):
                 raise ValueError(f"{field.label} must be a finite number")
             if value and field.kind == "date":
                 date.fromisoformat(value)
@@ -263,10 +264,15 @@ def resolved_values(
             continue
         calc = field.calculation
         inputs = [values.get(key, "") for key in calc.fields]
-        if any(value == "" for value in inputs):
+        if any(value in ("", "-") for value in inputs):
             values[field.id] = ""
             continue
-        numbers = [float(value) for value in inputs]
+        try:
+            numbers = [float(value) for value in inputs]
+        except (ValueError, TypeError):
+            raise ValueError(f"{field.label}: source values must be finite numbers") from None
+        if any(not math.isfinite(number) for number in numbers):
+            raise ValueError(f"{field.label}: source values must be finite numbers")
         if calc.operation == "sum":
             result = sum(numbers)
         elif calc.operation == "difference":
@@ -276,7 +282,6 @@ def resolved_values(
             raise ValueError(f"{field.label}: {denominator} (denominator) cannot be zero")
         else:
             result = numbers[0] / numbers[1] * 100
-        import math
         if not math.isfinite(result):
             labels = [item.label for item in definition.fields if item.id in calc.fields]
             raise ValueError(f"{field.label}: calculation overflow; check {', '.join(labels)}")

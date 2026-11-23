@@ -2,6 +2,7 @@
 import {
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type PointerEvent,
@@ -29,6 +30,8 @@ import {
 } from "@/lib/template-editing";
 import { extractionMime } from "@/components/image-extraction";
 import { fontSizes } from "@/lib/font-sizes";
+import { calculateValues } from "@/lib/template-api";
+import { fitReportText } from "@/lib/report-text";
 import { createId } from "@/lib/create-id";
 
 export const reportFonts = [
@@ -59,6 +62,25 @@ function ValueCanvas({ texture, label }: { texture: Texture; label: string }) {
     target.getContext("2d")?.drawImage(texture.canvas, 0, 0);
   }, [texture]);
   return <canvas ref={ref} aria-label={`Rendered value: ${label}`} />;
+}
+function LiveText({ text, field, width, height }: { text: string; field: TemplateField; width: number; height: number }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useLayoutEffect(() => {
+    const canvas = ref.current;
+    if (!canvas) return;
+    canvas.width = Math.max(1, Math.ceil(width * 3));
+    canvas.height = Math.max(1, Math.ceil(height * 3));
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    context.scale(3, 3);
+    const { size, lines } = fitReportText(context, text, field.font, field.font_size, width, height);
+    context.fillStyle = field.color;
+    context.textAlign = field.alignment;
+    context.textBaseline = "alphabetic";
+    const x = field.alignment === "center" ? width / 2 : field.alignment === "right" ? width - 1 : 1;
+    lines.forEach((line, index) => context.fillText(line, x, 1 + size + index * size * 1.15));
+  }, [text, field, width, height]);
+  return <canvas ref={ref} aria-label={`Rendered value: ${field.label}`} data-live-text={text} />;
 }
 type Gesture = {
   kind: "field" | "shape" | "draw";
@@ -102,6 +124,7 @@ export default function ReportPreview({
   activeField?: string | null;
   onActiveField?: (id: string | null) => void;
 }) {
+  const liveValues = useMemo(() => calculateValues(definition, report.values), [definition, report.values]);
   const [textures, setTextures] = useState<Texture[]>([]),
     [rendering, setRendering] = useState(false),
     [renderError, setRenderError] = useState("");
@@ -110,6 +133,13 @@ export default function ReportPreview({
     [hovered, setHovered] = useState<string | null>(null),
     [localField, setLocalField] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
+  const pendingCaret = useRef<{ control: HTMLTextAreaElement; position: number } | null>(null);
+  useLayoutEffect(() => {
+    const pending = pendingCaret.current;
+    if (!pending) return;
+    pendingCaret.current = null;
+    pending.control.setSelectionRange(pending.position, pending.position);
+  }, [report.values]);
   const [color, setColor] = useState("#ef2323"),
     [stroke, setStroke] = useState(3);
   const gesture = useRef<Gesture | null>(null);
@@ -605,7 +635,7 @@ export default function ReportPreview({
                   const item = definition.fields.find(
                     (field) => field.id === texture.id,
                   );
-                  if (!item) return null;
+                  if (!item || !["image", "checkbox"].includes(item.kind)) return null;
                   const box = boxFor(item);
                   if (box.page !== page) return null;
                   return (
@@ -624,6 +654,22 @@ export default function ReportPreview({
                       <ValueCanvas texture={texture} label={item.label} />
                     </div>
                   );
+                })}
+                {definition.fields.filter(item => !["image", "checkbox"].includes(item.kind)).map(item => {
+                  const box = boxFor(item);
+                  if (box.page !== page) return null;
+                  const override = report.styles[item.id];
+                  const field = { ...item, font: override?.font ?? item.font, font_size: override?.font_size ?? item.font_size, color: override?.color ?? item.color, alignment: override?.alignment ?? item.alignment };
+                  const value = liveValues[item.id] ?? "";
+                  let text = String(value);
+                  if (item.kind === "date" && /^\d{4}-\d{2}-\d{2}$/.test(text)) {
+                    const [year, month, day] = text.split("-");
+                    text = `${day} ${["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][Number(month)-1]} ${year}`;
+                  }
+                  return <div key={item.id} className="report-value" data-live-field={item.id}
+                    style={{ visibility: editing === item.id ? "hidden" : undefined, left: `${box.x*100}%`, top: `${box.y*100}%`, width: `${box.width*100}%`, height: `${box.height*100}%` }}>
+                    <LiveText text={text} field={field} width={box.width*size.width} height={box.height*size.height} />
+                  </div>;
                 })}
               </div>
               <svg
@@ -845,6 +891,8 @@ export default function ReportPreview({
                   };
                   const font = override?.font ?? item.font,
                     value = report.values[item.id] ?? item.default_value ?? "";
+                  const context = document.createElement("canvas").getContext("2d");
+                  const fittedSize = context ? fitReportText(context, String(value), font, override?.font_size ?? item.font_size, box.width * size.width, box.height * size.height).size : item.font_size;
                   const common = {
                     autoFocus: true,
                     maxLength: 20000,
@@ -860,6 +908,12 @@ export default function ReportPreview({
                       if (event.key === "Escape") {
                         event.preventDefault();
                         clearSelection();
+                      } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey || event.shiftKey) && !event.nativeEvent.isComposing && ["text", "textarea"].includes(item.kind)) {
+                        event.preventDefault();
+                        const control = event.currentTarget as HTMLTextAreaElement;
+                        const start = control.selectionStart, end = control.selectionEnd;
+                        pendingCaret.current = { control, position: start + 1 };
+                        onValue?.(item, control.value.slice(0, start) + "\n" + control.value.slice(end));
                       } else if (
                         event.key === "Enter" &&
                         !event.shiftKey &&
@@ -883,7 +937,7 @@ export default function ReportPreview({
                     style: {
                       fontFamily: fonts[font] || fonts["Times-Roman"],
                       fontWeight: font.includes("Bold") ? 700 : 400,
-                      fontSize: `${((override?.font_size ?? item.font_size) * 100) / size.width}cqw`,
+                      fontSize: `${(fittedSize * 100) / size.width}cqw`,
                       color: override?.color ?? item.color,
                       textAlign: override?.alignment ?? item.alignment,
                     },
@@ -929,6 +983,7 @@ export default function ReportPreview({
                           onChange={(event) =>
                             onValue?.(item, event.target.value)
                           }
+                          wrap="off"
                           spellCheck={false}
                         />
                       ) : (
@@ -936,7 +991,7 @@ export default function ReportPreview({
                           {...common}
                           type={
                             item.kind === "number"
-                              ? "number"
+                              ? "text"
                               : item.kind === "date"
                                 ? "date"
                                 : item.kind === "time"

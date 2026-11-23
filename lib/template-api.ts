@@ -163,7 +163,7 @@ export async function templateRequest(
       throw error;
     throw new Error(
       window.reportFormatterDesktop
-        ? "The app has stopped responding. Close Report Formatter and open it again. Saved work is safe."
+        ? "The app has stopped responding. Close PAMAS and open it again. Saved work is safe."
         : "Cannot reach the template service. Check your connection and sign-in, then retry. For local development, check Docker Compose and port 8001.",
     );
   }

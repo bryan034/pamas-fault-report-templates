@@ -21,11 +21,9 @@ export default function TemplateDefaultPreview({
   field,
   page,
   showLabel = false,
-  onFit,
 }: {
   field: TemplateField;
   showLabel?: boolean;
-  onFit?: (field: TemplateField, width: number, height: number) => void;
   page: { width: number; height: number };
 }) {
   const value = showLabel ? field.label : templateDefaultText(field);
@@ -40,11 +38,11 @@ export default function TemplateDefaultPreview({
     if (!node || !value) return;
     node.removeAttribute("transform");
     const bounds = node.getBBox();
-    // Center the actual glyph bounds, giving equal space on opposite sides.
-    node.setAttribute("transform", `translate(${width / 2 - bounds.x - bounds.width / 2} ${height / 2 - bounds.y - bounds.height / 2})`);
-    if (!image) onFit?.(field, bounds.width + 2,
-      Math.max(bounds.height, lines.length * fontSize * 1.15) + 2);
-  }, [field, value, width, height, fontSize, image, lines.length, onFit]);
+    // Refit labels and defaults on every geometry change without growing the box.
+    // Always measure at the configured size so enlarging the box restores text.
+    const scale = Math.min(1, Math.max(.01, width - 2) / Math.max(.01, bounds.width), Math.max(.01, height - 2) / Math.max(.01, bounds.height));
+    node.setAttribute("transform", `translate(${width / 2 - (bounds.x + bounds.width / 2) * scale} ${height / 2 - (bounds.y + bounds.height / 2) * scale}) scale(${scale})`);
+  }, [value, width, height, fontSize, field.font]);
   if (!value) return null;
   return (
     <svg

@@ -119,3 +119,54 @@ restores both geometry and cover attachment; saving retains the detached cover.
 Verification: 46 helper tests and all 15 focused browser scenarios passed (the
 new detachment scenario was rerun after correcting its initial-load wait).
 TypeScript passed; changed-file lint passed with one existing hook warning.
+
+## PAMAS entry, live preview and automatic saving
+
+- Report text shrinks to fit its field without changing saved geometry or font
+  preferences. Shorter values recover the configured size. PDF and derived DOCX
+  use the same fitting; template defaults also shrink within their boxes.
+- Text preview draws current values locally, including calculated values, while
+  server-rendered photo layers refresh. Inline editing uses the fitted font size.
+- Reports automatically save after 600 ms without an edit, including photos.
+  Saves are serialized; edits made during a save trigger a subsequent save.
+  Untitled reports use `Untitled report` until a title is supplied. Trial entry
+  remains temporary. A failed save is shown and can be retried with Save.
+- Attaching, replacing or removing photos preserves entered values. Automatic
+  crop OCR only fills blank fields and does not apply missing readings or replace
+  edits made while OCR runs. Explicit BX extraction remains available.
+- Calculations accept number, text and textarea operands containing numeric
+  strings. Invalid text and non-finite inputs produce named validation errors.
+- Branding uses PAMAS and the supplied logo. The Windows data directory and backup
+  format remain compatible with existing installations.
+
+Verification: 257 backend tests passed, 3 optional skips, 1 existing expected
+failure; 11 helper checks passed; all 6 report-entry and 8 report-flow browser
+checks passed against disposable data. TypeScript and production build passed;
+changed-file lint has warnings but no errors. No application data was used and
+no cloud deployment or Windows installer build was performed.
+
+## Fit template text while resizing fields
+
+Template labels and defaults now shrink inside the user-defined input box during
+drawing and resizing, in both regular and clean previews. This replaces automatic
+label-driven box growth. Enlarging the box restores text up to the configured
+font size; fitting changes neither that saved preference nor cover geometry.
+
+Browser checks cover live dragging, multiline defaults, tiny and roomy boxes,
+centered text, undo/redo, and saving/reopening resized fields with a disposable
+database. TypeScript and changed-file lint pass (one existing hook warning).
+
+## Explicit report lines and dash readings
+
+- Report text retains the selected size while it fits, shrinking on one line
+  instead of wrapping. Ctrl+Enter, Cmd+Enter and the existing Shift+Enter insert
+  explicit line breaks in sidebar and inline entry. Smaller report boxes reduce
+  the displayed size without modifying the selected font preference.
+- Sidebar entry shrinks to its visible width. Number fields accept a standalone
+  `-`, retain it in drafts and PDF/DOCX output, and leave dependent calculations
+  blank instead of interpreting the dash as zero. Negative numbers still work.
+- Verified against disposable data: 259 backend tests passed, 3 optional skips,
+  1 existing expected failure; 4 report-entry helper tests and 3 focused browser
+  checks passed. TypeScript passed; changed-file lint had no errors and 5 existing
+  warnings. The browser checks cover keyboard entry, caret placement, no-scroll
+  fitting, draft/export persistence and font reduction during drag resizing.

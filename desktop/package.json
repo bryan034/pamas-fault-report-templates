@@ -1,10 +1,10 @@
 {
   "name": "report-formatter-desktop",
-  "productName": "Report Formatter",
+  "productName": "PAMAS",
   "version": "1.0.0",
   "private": true,
-  "description": "Report Formatter desktop application",
-  "author": "Report Formatter",
+  "description": "PAMAS desktop application",
+  "author": "PAMAS",
   "main": "main.cjs",
   "scripts": {
     "web": "node scripts/build-web.mjs",
@@ -18,7 +18,7 @@
   },
   "build": {
     "appId": "local.reportformatter.desktop",
-    "productName": "Report Formatter",
+    "productName": "PAMAS",
     "directories": { "output": "dist", "buildResources": "build" },
     "files": ["main.cjs", "preload.cjs", "starting.html", "package.json"],
     "extraResources": [
@@ -38,9 +38,9 @@
       "perMachine": false,
       "createDesktopShortcut": "always",
       "createStartMenuShortcut": true,
-      "shortcutName": "Report Formatter",
+      "shortcutName": "PAMAS",
       "deleteAppDataOnUninstall": false,
-      "artifactName": "Report-Formatter-Setup-${version}.${ext}"
+      "artifactName": "PAMAS-Setup-${version}.${ext}"
     }
   }
 }

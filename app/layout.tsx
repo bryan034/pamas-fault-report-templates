@@ -3,11 +3,11 @@ import "./globals.css";
 import { ApplicationAccess } from "@/components/application-access";
 
 export const metadata: Metadata = {
-  title: "Report Formatter",
+  title: "PAMAS",
   description: "Choose report templates, manage drafts, and generate calibrated PDF reports.",
   icons: {
-    icon: "/favicon.svg",
-    shortcut: "/favicon.svg",
+    icon: "/pamas-logo.png",
+    shortcut: "/pamas-logo.png",
   },
 };
 

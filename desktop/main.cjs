@@ -1,10 +1,13 @@
 "use strict";
-// Report Formatter desktop shell: starts the private Python backend and shows the app.
+// PAMAS desktop shell: starts the private Python backend and shows the app.
 const { app, BrowserWindow, Menu, dialog, ipcMain, session } = require("electron");
 const { spawn } = require("node:child_process");
 const { randomBytes } = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
+
+// Keep existing installations on their original data directory after rebranding.
+app.setPath("userData", path.join(app.getPath("appData"), "Report Formatter"));
 
 const BACKUP_EXTENSION = "rfbackup";
 const STARTUP_TIMEOUT_MS = 180_000; // First launch on a slow PC, with antivirus scanning.
@@ -156,8 +159,8 @@ async function backendCrashed() {
   origin = null;
   const { response } = await dialog.showMessageBox(window, {
     type: "error",
-    title: "Report Formatter",
-    message: "Report Formatter stopped unexpectedly.",
+    title: "PAMAS",
+    message: "PAMAS stopped unexpectedly.",
     detail: "Your saved work is safe. Anything not yet saved may need to be entered again.",
     buttons: ["Restart", "Close"],
   });
@@ -168,7 +171,7 @@ async function backendCrashed() {
 function startupFailed(error) {
   if (quitting) return;
   dialog.showErrorBox(
-    "Report Formatter could not start",
+    "PAMAS could not start",
     `${error.message}\n\nRestart your computer and try again. If it still does not open, send this file to your support contact:\n${path.join(app.getPath("userData"), "logs", "backend.log")}`,
   );
   app.quit();
@@ -188,11 +191,11 @@ async function postPath(route, target) {
 async function createBackup() {
   const settings = readSettings();
   const date = new Date().toISOString().slice(0, 10);
-  const name = `Report Formatter backup ${date}.${BACKUP_EXTENSION}`;
+  const name = `PAMAS backup ${date}.${BACKUP_EXTENSION}`;
   const { canceled, filePath } = await dialog.showSaveDialog(window, {
     title: "Save backup to a USB drive or cloud folder (OneDrive, Google Drive, Dropbox)",
     defaultPath: path.join(settings.backupFolder || app.getPath("documents"), name),
-    filters: [{ name: "Report Formatter backup", extensions: [BACKUP_EXTENSION] }],
+    filters: [{ name: "PAMAS backup", extensions: [BACKUP_EXTENSION] }],
     buttonLabel: "Save backup",
   });
   if (canceled || !filePath) return { status: "cancelled" };
@@ -213,14 +216,14 @@ async function restoreBackup() {
   const { canceled, filePaths } = await dialog.showOpenDialog(window, {
     title: "Choose a backup to restore",
     defaultPath: readSettings().backupFolder || app.getPath("documents"),
-    filters: [{ name: "Report Formatter backup", extensions: [BACKUP_EXTENSION] }],
+    filters: [{ name: "PAMAS backup", extensions: [BACKUP_EXTENSION] }],
     properties: ["openFile"],
   });
   if (canceled || !filePaths.length) return { status: "cancelled" };
   const { response } = await dialog.showMessageBox(window, {
     type: "warning",
     title: "Restore this backup?",
-    message: "Replace everything in Report Formatter with this backup?",
+    message: "Replace everything in PAMAS with this backup?",
     detail: `${filePaths[0]}\n\nTemplates and reports saved after this backup will no longer appear. Unsaved changes on screen will be lost.`,
     buttons: ["Cancel", "Replace with backup"],
     defaultId: 0,
@@ -240,7 +243,7 @@ function createWindow() {
     height: 1000,
     minWidth: 900,
     minHeight: 600,
-    title: "Report Formatter",
+    title: "PAMAS",
     show: false,
     backgroundColor: "#ffffff",
     webPreferences: { preload: path.join(__dirname, "preload.cjs"), contextIsolation: true, sandbox: true },

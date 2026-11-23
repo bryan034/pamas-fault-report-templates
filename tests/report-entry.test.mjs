@@ -29,3 +29,18 @@ test("Enter advances in visual order, skips images/calculations and stops at the
   assert.equal(nextReportField(fields, {}, "unknown"), undefined);
   assert.equal(nextReportField(fields, { second: { page: 0, x: 0.05, y: 0.01 } }, "report_title").id, "second");
 });
+
+test("calculations convert numeric text strings and reject nonnumeric text", () => {
+  const definition = { fields: [
+    { id: "a", kind: "text" }, { id: "b", kind: "text" },
+    { id: "result", kind: "calculated", calculation: { operation: "difference", fields: ["a", "b"] } },
+  ] };
+  assert.equal(calculateValues(definition, { a: "42.5", b: " 20 " }).result, "22.5");
+  assert.equal(calculateValues(definition, { a: "hello", b: "20" }).result, "");
+});
+
+
+test("dash readings stay visible and leave calculations blank", () => {
+  assert.equal(calculateValues({ fields }, { second: "-" }).second, "-");
+  assert.equal(calculateValues({ fields }, { second: "-" }).total, "");
+});

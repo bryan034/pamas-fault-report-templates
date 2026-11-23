@@ -25,6 +25,7 @@ import ResizableReportWorkspace, {
   revealSidebarField,
 } from "@/components/resizable-report-workspace";
 import ReportTitleRequired from "@/components/report-title-required";
+import ReportTextInput from "@/components/report-text-input";
 import { Input } from "@/components/ui/input";
 import ReportPreview, {
   reportConfiguration,
@@ -410,21 +411,18 @@ export default function TemplateEditor({
     });
   };
   const fieldKeyDown = (event: KeyboardEvent<HTMLElement>, id: string, field?: TemplateField) => {
-    if (!template || event.key !== "Enter" || event.nativeEvent.isComposing || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (!template || event.key !== "Enter" || event.nativeEvent.isComposing || event.altKey) return;
     const control = event.target;
     if (!(control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement || control instanceof HTMLSelectElement)) return;
-    if (event.shiftKey) {
-      if (field && ["text", "textarea"].includes(field.kind) && control instanceof HTMLInputElement) {
+    if (event.ctrlKey || event.metaKey || event.shiftKey) {
+      if (field && ["text", "textarea"].includes(field.kind)) {
         event.preventDefault();
-        const start = control.selectionStart ?? control.value.length;
-        const end = control.selectionEnd ?? start;
-        const nextValue = control.value.slice(0, start) + "\n" + control.value.slice(end);
-        // Restore the caret in the replacement textarea during this commit,
-        // before the next keypress (an animation frame can race fast typing).
+        const start = control instanceof HTMLSelectElement ? 0 : control.selectionStart ?? control.value.length;
+        const end = control instanceof HTMLSelectElement ? start : control.selectionEnd ?? start;
         pendingTextSelection.current = { id: field.id, position: start + 1 };
-        setValue(field, nextValue);
+        setValue(field, control.value.slice(0, start) + "\n" + control.value.slice(end));
       }
-      return; // Textareas insert their own newline; date/number fields stay typed.
+      return;
     }
     event.preventDefault();
     const next = nextReportField(template.definition.fields, report.layout, id);
@@ -496,7 +494,7 @@ export default function TemplateEditor({
         ...current.values,
         ...Object.fromEntries(
           Object.entries(updates).filter(
-            ([id]) => (valueEdits.current[id] || 0) === (targetEdits[id] || 0),
+            ([id, value]) => value !== "" && !current.values[id] && (valueEdits.current[id] || 0) === (targetEdits[id] || 0),
           ),
         ),
       },
@@ -598,11 +596,6 @@ export default function TemplateEditor({
       setOcrNotes(current => ({...current, [fieldId]: ""}));
       setReport((current) => {
         const next = { ...current.values };
-        for (const mapping of template?.definition.ocr_mappings || [])
-          if (mapping.image_field === fieldId) next[mapping.target_field] = "";
-        for (const item of extractedItems)
-          if (item.image_field === fieldId && item.target_field)
-            next[item.target_field] = "";
         return {
           ...current,
           values: next,
@@ -633,16 +626,6 @@ export default function TemplateEditor({
     });
     setReport((current) => ({
       ...current,
-      values: Object.fromEntries(
-        Object.entries(current.values).map(([key, value]) => [
-          key,
-          extractedItems.some(
-            (item) => item.image_field === fieldId && item.target_field === key,
-          )
-            ? ""
-            : value,
-        ]),
-      ),
       extraction_values: Object.fromEntries(
         Object.entries(current.extraction_values).filter(
           ([key]) =>
@@ -662,23 +645,37 @@ export default function TemplateEditor({
       return next;
     });
   };
-  const save = async (publishConfiguration = false) => {
-    if (!report.title.trim()) {
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  const saveLock = useRef(false);
+  const failedSave = useRef<{ report: TemplateReport; images: Record<string, File> } | null>(null);
+  const lastSaved = useRef<{ report: TemplateReport; images: Record<string, File> } | null>(null);
+  const [autoSaveStatus, setAutoSaveStatus] = useState("");
+  const save = async (publishConfiguration = false, automatic = false) => {
+    if (saveLock.current) return;
+    if (!automatic && !report.title.trim()) {
       setNotice({ message: "Enter a report title to save. Still blank:", fields: missing });
       return;
     }
     setConfigurationDialog(false);
+    saveLock.current = true;
     setSaving(true);
+    setAutoSaveStatus("Saving…");
     try {
       const draft = await templateJson<CustomDraftDetail>(
         activeDraft ? `${base}/drafts/${activeDraft}` : `${base}/drafts`,
         {
           method: activeDraft ? "PUT" : "POST",
-          body: reportPayload(report, images, template?.revision_id),
+          body: reportPayload({ ...report, title: report.title.trim() || "Untitled report" }, images, template?.revision_id),
         },
       );
+      lastSaved.current = { report, images };
+      setAutoSaveStatus("All changes saved");
       setActiveDraft(draft.id);
-      if (!activeDraft)
+      if (!activeDraft && mounted.current)
         window.history.replaceState(
           null,
           "",
@@ -719,22 +716,39 @@ export default function TemplateEditor({
           return;
         }
       }
-      configurationBaseline.current = JSON.stringify(
+      if (!automatic) configurationBaseline.current = JSON.stringify(
         history.value.configuration,
       );
-      setNotice(
+      if (!automatic) setNotice(
         missing.length
           ? { message: "Draft saved. Still blank:", fields: missing }
           : "Draft saved. All required fields are filled.",
       );
     } catch (cause) {
+      failedSave.current = { report, images };
+      setAutoSaveStatus("Not saved — use Save to retry");
       setNotice(
         cause instanceof Error ? cause.message : "Could not save draft",
       );
     } finally {
+      saveLock.current = false;
       setSaving(false);
     }
   };
+
+  useEffect(() => {
+    if (sandbox || loading || !template || loadError) return;
+    if (!lastSaved.current) {
+      lastSaved.current = { report, images };
+      return;
+    }
+    if (lastSaved.current.report === report && lastSaved.current.images === images) return;
+    if (saving || (failedSave.current?.report === report && failedSave.current.images === images)) return;
+    const timer = window.setTimeout(() => void save(false, true), 600);
+    return () => window.clearTimeout(timer);
+    // Save the current snapshot after edits settle; in-flight saves finish first.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [report, images, loading, template, saving, sandbox, loadError]);
   const download = async (format: "pdf" | "docx" | "original" = "pdf") => {
     setDownloading(true);
     try {
@@ -1157,14 +1171,17 @@ export default function TemplateEditor({
                   <span>
                     {field.label}
                   </span>
-                  {field.kind === "textarea" || (field.kind === "text" && String(value).includes("\n")) ? (
-                    <textarea
-                      aria-label={field.label}
-                      rows={4}
-                      maxLength={20000}
-                      style={{ textAlign: report.styles[field.id]?.alignment ?? field.alignment }}
+                  {["text", "textarea", "number"].includes(field.kind) ? (
+                    <ReportTextInput
+                      label={field.label}
                       value={String(value)}
-                      onChange={(event) => setValue(field, event.target.value)}
+                      multiline={field.kind !== "number"}
+                      font={report.styles[field.id]?.font ?? field.font}
+                      fontSize={report.styles[field.id]?.font_size ?? field.font_size}
+                      alignment={report.styles[field.id]?.alignment ?? field.alignment}
+                      list={field.role === "company" ? `companies-${field.id}` : undefined}
+                      invalid={calcProblemIds.has(field.id)}
+                      onChange={(value) => setValue(field, value)}
                     />
                   ) : field.kind === "select" ? (
                     <select
@@ -1220,6 +1237,7 @@ export default function TemplateEditor({
           )}
         </aside>
         <section className="template-preview-pane">
+          {!sandbox && <p aria-live="polite" data-autosave-status>{autoSaveStatus}</p>}
           <ReportPreview
             definition={template.definition}
             report={report}

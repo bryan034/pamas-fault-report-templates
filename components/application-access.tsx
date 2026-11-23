@@ -79,7 +79,7 @@ export function ApplicationAccess({ children }: { children: React.ReactNode }) {
       ) : (
         <>
           <div className="application-access-bar" aria-label="Application access">
-            <a href="/">Report Formatter</a>
+            <a href="/">PAMAS</a>
             {window.reportFormatterDesktop ? <DesktopBackup /> : <>
               <span>{user.mode === "local" ? "Local development — no login" : `${user.email} · ${user.role}`}</span>
               {(canManage || user.mode === "local") && <a href="/access">Manage access</a>}

@@ -262,3 +262,10 @@ button, input, textarea, select { font: inherit; }
 }
 
 .report-inline-editor > input:not([type="checkbox"]),.report-inline-editor > select { height:auto; }
+
+.brand-mark img,.login-brand-icon img { width:100%; height:100%; object-fit:contain; background:white; border-radius:4px; }
+
+/* Explicit report lines shrink to fit instead of creating scrollbars. */
+.report-inline-editor > textarea { white-space:pre; overflow:hidden; }
+.field-stack .report-text-input { resize:none; overflow:hidden; white-space:pre; line-height:1.15; }
+.field-stack input.report-text-input { min-height:36px; padding:10px 12px; line-height:1.15; }

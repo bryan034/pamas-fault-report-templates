@@ -245,10 +245,10 @@ export default function Home() {
     <main className="catalog-shell">
       <header className="catalog-header">
         <div className="brand-mark">
-          <FileText />
+          <img src="/pamas-logo.png" alt="PAMAS" />
         </div>
         <div>
-          <h1>Report Formatter</h1>
+          <h1>PAMAS</h1>
           <p>Choose a template to create or continue a report.</p>
         </div>
         {canEdit && <Button asChild>

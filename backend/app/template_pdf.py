@@ -453,23 +453,27 @@ def _display_value(field, values):
 
 
 def report_field_box(field, box, page, report, values):
-    """Honor the effective font size, inherited or overridden, by growing boxes."""
-    style = report.styles.get(field.id)
-    if field.kind in {"image", "checkbox"}:
-        return box
-    font = (style.font if style else None) or field.font
-    size = style.font_size if style and style.font_size is not None else field.font_size
-    value = _display_value(field, values)
-    desired_width = max((pdfmetrics.stringWidth(line, font, size) + 2
-                         for line in value.split("\n")), default=2)
-    width = min(page.width, max(box.width * page.width, desired_width))
-    lines = _wrap(value, font, size, max(1, width - 2))
-    height = max(box.height * page.height, len(lines) * size * 1.15 + 2)
-    if height > page.height or any(pdfmetrics.stringWidth(line, font, size) > width - 2 + .001 for line in lines):
-        raise ValueError(f"{field.label} does not fit on this page at {size:g} pt. Shorten the text or select a smaller font.")
-    width, height = width / page.width, height / page.height
-    return PageBox(page=box.page, x=max(0, min(box.x, 1-width)),
-                   y=max(0, min(box.y, 1-height)), width=width, height=height)
+    """Keep saved field geometry; report text fits inside this box."""
+    return PageBox(page=box.page, x=box.x, y=box.y, width=box.width, height=box.height)
+
+
+def fit_report_text(value, font, maximum, width, height):
+    """Fit explicit lines without changing saved font settings or field geometry."""
+    width, height = max(.01, width - 2), max(.01, height - 2)
+    def fits(size):
+        lines = value.split("\n")
+        return (len(lines) * size * 1.15 <= height and
+                all(pdfmetrics.stringWidth(line, font, size) <= width + .00001 for line in lines))
+    if fits(maximum):
+        return maximum, value.split("\n")
+    low, high = 0., maximum
+    for _ in range(32):
+        middle = (low + high) / 2
+        if fits(middle):
+            low = middle
+        else:
+            high = middle
+    return low, value.split("\n")
 
 
 def _paint_field(pdf, field, box, page, report, values, images):
@@ -521,15 +525,7 @@ def _paint_field(pdf, field, box, page, report, values, images):
         if not value:
             pdf.restoreState()
             return
-        size = field.font_size
-        lines = _wrap(value, field.font, size, max(1, width - 2))
-        if len(lines) * size * 1.15 > height or any(
-            pdfmetrics.stringWidth(line, field.font, size) > max(0, width - 2)
-            for line in lines
-        ):
-            raise ValueError(
-                f"{field.label} text does not fit. Enlarge this field or shorten the text."
-            )
+        size, lines = fit_report_text(value, field.font, field.font_size, width, height)
         pdf.setFont(field.font, size)
         baseline = y + height - 1 - size
         for line in lines:

@@ -1,6 +1,6 @@
 "use client";
 // Full navigation avoids the Vinext Link runtime mismatch.
-import { useCallback, useEffect, useRef, useState, type PointerEvent } from "react";
+import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { ArrowLeft, ImagePlus, Plus, Redo2, Undo2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -77,7 +77,6 @@ export default function TemplateBuilder({
 }) {
   const history = useEditHistory<DocumentState | null>(null);
   const resetHistory = history.reset;
-  const setHistory = history.set;
   const definition = history.value?.definition,
     title = history.value?.title || "";
   const [trial, setTrial] = useState<Uint8Array | null>(null);
@@ -324,26 +323,6 @@ export default function TemplateBuilder({
     setSaved(null);
     setError("");
   };
-  const fitFieldLabel = useCallback((expected: TemplateField, minimumWidth: number, minimumHeight: number) => {
-    let changed = false;
-    setHistory(current => {
-      if (!current) return current;
-      const field = current.definition.fields.find(item => item.id === expected.id);
-      if (field !== expected || field.kind === "image") return current;
-      const page = current.definition.pages[field.page];
-      const width = Math.min(1, Math.max(field.width, minimumWidth / page.width));
-      const height = Math.min(1, Math.max(field.height, minimumHeight / page.height));
-      if (width - field.width < .000001 && height - field.height < .000001) return current;
-      changed = true;
-      return { ...current, definition: { ...current.definition,
-        fields: current.definition.fields.map(item => item === field ? { ...item,
-          width, height, x: Math.min(item.x, 1 - width), y: Math.min(item.y, 1 - height),
-        } : item),
-        // Covers retain the area chosen by the user, including attached covers.
-      } };
-    }, false);
-    if (changed) { setDirty(true); setSaved(null); }
-  }, [setHistory]);
   const updateField = (updates: Partial<TemplateField>) =>
     change((current) => ({
       ...current,
@@ -1295,7 +1274,7 @@ export default function TemplateBuilder({
                           <Input
                             type={
                               field.kind === "number"
-                                ? "number"
+                                ? "text"
                                 : field.kind === "date"
                                   ? "date"
                                   : "text"
@@ -1401,9 +1380,9 @@ export default function TemplateBuilder({
                                 })
                               }
                             >
-                              <option value="">Choose number</option>
+                              <option value="">Choose number or text</option>
                               {definition.fields
-                                .filter((item) => item.kind === "number")
+                                .filter((item) => ["number", "text", "textarea"].includes(item.kind))
                                 .map((item) => (
                                   <option key={item.id} value={item.id}>
                                     {item.label}
@@ -1458,9 +1437,9 @@ export default function TemplateBuilder({
                                 })
                               }
                             >
-                              <option value="">Choose number</option>
+                              <option value="">Choose number or text</option>
                               {definition.fields
-                                .filter((item) => item.kind === "number")
+                                .filter((item) => ["number", "text", "textarea"].includes(item.kind))
                                 .map((item) => (
                                   <option key={item.id} value={item.id}>
                                     {item.label}
@@ -1761,14 +1740,12 @@ export default function TemplateBuilder({
                                 <TemplateDefaultPreview
                                   field={boxField}
                                   page={definition.pages[page]}
-                                  onFit={boxDragging ? undefined : fitFieldLabel}
                                 />
                               )}
                               {boxField && !templateDefaultText(boxField) && (
                                 <TemplateDefaultPreview
                                   field={boxField}
                                   page={definition.pages[page]}
-                                  onFit={boxDragging ? undefined : fitFieldLabel}
                                   showLabel
                                 />
                               )}

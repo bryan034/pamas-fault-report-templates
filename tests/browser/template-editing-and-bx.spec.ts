@@ -179,7 +179,7 @@ test("report undo restores removed photos and a reset; opening a saved draft sta
   await expect(page.getByRole("button",{name:"Undo",exact:true})).toBeDisabled();
 });
 
-test("template boxes grow around centered labels without enlarging covers; image labels stay normal",async({page,request})=>{
+test("template labels and defaults fit centered inside fixed boxes in both previews",async({page,request})=>{
   const fields=[
     {id:"label",label:"Position this label",kind:"text",page:0,x:.1,y:.2,width:.1,height:.01,font_size:32,required:false},
     {id:"number",label:"BX1",kind:"number",page:0,x:.1,y:.4,width:.04,height:.01,font_size:48,required:false},
@@ -196,6 +196,8 @@ test("template boxes grow around centered labels without enlarging covers; image
     await expect(label).toBeVisible();
     await expect.poll(async()=>{
       const text=(await label.boundingBox())!,box=(await fieldRect(id).boundingBox())!;
+      expect(text.width).toBeLessThanOrEqual(box.width + .1);
+      expect(text.height).toBeLessThanOrEqual(box.height + .1);
       return Math.max(Math.abs(text.x+text.width/2-box.x-box.width/2),Math.abs(text.y+text.height/2-box.y-box.height/2));
     }).toBeLessThan(.5);
   };
@@ -205,14 +207,9 @@ test("template boxes grow around centered labels without enlarging covers; image
       await centered(field.id);
       const rect=fieldRect(field.id);
       const cover=page.locator(`[data-box-kind="cover"][data-box-id="${field.id}"] > rect`).first();
-      for(const attribute of ["x","y","width","height"] as const)
+      for(const attribute of ["x","y","width","height"] as const) {
         expect(Number(await cover.getAttribute(attribute))).toBe(field[attribute]);
-      if(["label","number","default"].includes(field.id)) {
-        await expect.poll(async()=>Number(await rect.getAttribute("height"))).toBeGreaterThan(field.height);
-        await expect(page.locator(`[data-template-label="${field.id}"], [data-template-default="${field.id}"]`).locator("text")).toHaveAttribute("font-size",String(field.font_size));
-      } else {
-        expect(Number(await rect.getAttribute("width"))).toBe(field.width);
-        expect(Number(await rect.getAttribute("height"))).toBe(field.height);
+        expect(Number(await rect.getAttribute(attribute))).toBe(field[attribute]);
       }
     }
   }
@@ -226,7 +223,61 @@ test("template boxes grow around centered labels without enlarging covers; image
   await expect(page.getByRole("heading",{name:"Template saved successfully"})).toBeVisible();
   const saved=await(await request.get(`${api}/api/templates/${template.id}`)).json();
   expect(saved.definition.clear_areas).toEqual(covers);
-  expect(saved.definition.fields.find((field:{id:string})=>field.id==="number").height).toBeGreaterThan(.01);
+  expect(saved.definition.fields.find((field:{id:string})=>field.id==="number")).toMatchObject(fields[1]);
+});
+
+test("drag resizing refits labels and multiline defaults live, restores size and preserves saved geometry",async({page,request})=>{
+  const fields=[
+    {id:"label",label:"Resize this field",kind:"text",page:0,x:.1,y:.2,width:.7,height:.18,font_size:32,required:false},
+    {id:"default",label:"Notes",default_value:"First line\nSecond line",kind:"textarea",page:0,x:.1,y:.5,width:.7,height:.18,font_size:24,required:false},
+  ];
+  const covers=fields.map(field=>({id:field.id,page:field.page,x:field.x,y:field.y,width:field.width,height:field.height,color:"#ffffff"}));
+  const template=await seed(request,fields,covers);
+  await page.goto(`/templates/custom/${template.id}/edit`);
+  const widths:Record<string,number>={};
+  for(const field of fields) {
+    const group=page.locator(`[data-box-kind="field"][data-box-id="${field.id}"]`);
+    const rect=group.locator("rect").first(), text=group.locator("text");
+    await expect(text).toBeVisible();
+    const scale=()=>text.evaluate(node=>(node as SVGGraphicsElement).transform.baseVal.consolidate()!.matrix.a);
+    await expect.poll(scale).toBeCloseTo(1,5);
+    await rect.click();
+    const paper=(await page.getByLabel("Template field review, page 1").boundingBox())!;
+    const handle=(await group.locator('[data-resize-edge="se"]').boundingBox())!;
+    await page.mouse.move(handle.x+handle.width/2,handle.y+handle.height/2);
+    await page.mouse.down();
+    await page.mouse.move(paper.x+paper.width*(field.x+.08),paper.y+paper.height*(field.y+.018),{steps:8});
+    // Check while the pointer is still held, not only after the gesture finishes.
+    await expect.poll(scale).toBeLessThan(.5);
+    const bounds=(await rect.boundingBox())!, glyphs=(await text.boundingBox())!;
+    expect(glyphs.width).toBeLessThan(bounds.width);
+    expect(glyphs.height).toBeLessThan(bounds.height);
+    await page.mouse.up();
+    await expect.poll(async()=>Number(await rect.getAttribute("width"))).toBeCloseTo(.08,3);
+    const smallScale=await scale();
+    await page.getByRole("button",{name:"Undo",exact:true}).click();
+    await expect.poll(scale).toBeCloseTo(1,5);
+    await expect.poll(async()=>Number(await rect.getAttribute("width"))).toBeCloseTo(field.width,5);
+    await page.getByRole("button",{name:"Redo",exact:true}).click();
+    await expect.poll(scale).toBeCloseTo(smallScale,5);
+    widths[field.id]=Number(await rect.getAttribute("width"));
+  }
+  await page.getByRole("button",{name:"Save template",exact:true}).click();
+  await expect(page.getByRole("heading",{name:"Template saved successfully"})).toBeVisible();
+  const saved=await(await request.get(`${api}/api/templates/${template.id}`)).json();
+  expect(saved.definition.clear_areas).toEqual(covers);
+  for(const field of fields) {
+    const stored=saved.definition.fields.find((item:{id:string})=>item.id===field.id);
+    expect(stored.width).toBeCloseTo(widths[field.id],5);
+    expect(stored.height).toBeCloseTo(.018,3);
+    expect(stored.font_size).toBe(field.font_size);
+  }
+  await page.goto(`/templates/custom/${template.id}/edit`);
+  for(const field of fields) {
+    const rect=page.locator(`[data-box-kind="field"][data-box-id="${field.id}"] > rect`).first();
+    await expect(rect).toBeVisible();
+    expect(Number(await rect.getAttribute("width"))).toBeCloseTo(widths[field.id],5);
+  }
 });
 
 

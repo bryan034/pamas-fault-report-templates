@@ -11,15 +11,16 @@ const python = (code: string, input?: Buffer) =>
     env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
   });
 
-async function seed(request: APIRequestContext) {
+async function seed(request: APIRequestContext, ocr = false, textSources = false) {
   const definition = JSON.parse(
     python(
       "import runpy;print(runpy.run_path('tests/test_templates.py')['definition']().model_dump_json())",
     ).toString(),
   );
-  definition.ocr_mappings = [];
+  if (!ocr) definition.ocr_mappings = [];
   definition.fields[0].default_value = "Shared Company";
   definition.fields[3].default_value = "30";
+  if (textSources) definition.fields[3].kind = "text";
   definition.fields.push({
     ...definition.fields[3],
     id: "rated",
@@ -153,12 +154,12 @@ test("template defaults update live, fit their boxes and preserve blank, zero an
       const text = svg.querySelector("text")!;
       const rect = (text as SVGGraphicsElement).getBBox();
       const view = (svg as SVGSVGElement).viewBox.baseVal;
-      return (
-        rect.x >= -0.1 &&
-        rect.y >= -0.1 &&
-        rect.x + rect.width <= view.width + 0.1 &&
-        rect.y + rect.height <= view.height + 0.1
-      );
+      // getBBox excludes the text's centering transform. Compare rendered bounds
+      // in the containing SVG's coordinates, rather than the unshifted glyphs.
+      const matrix = (svg as SVGSVGElement).getScreenCTM()!.inverse().multiply(text.getScreenCTM()!);
+      const start = new DOMPoint(rect.x, rect.y).matrixTransform(matrix);
+      const end = new DOMPoint(rect.x + rect.width, rect.y + rect.height).matrixTransform(matrix);
+      return start.x >= -0.1 && start.y >= -0.1 && end.x <= view.width + 0.1 && end.y <= view.height + 0.1;
     }),
   ).toBe(true);
   await control.fill("");
@@ -306,4 +307,110 @@ test("Enter navigation, Shift+Enter, alignment and hidden calculations persist t
     "text-align",
     "right",
   );
+});
+
+test("PAMAS keeps typed temperatures through OCR photo upload and autosaves live edits", async ({ page, request }) => {
+  const template = await seed(request, true);
+  const base = `${api}/${template.id}`;
+  await page.goto(`/templates/custom/${template.id}/new`);
+  const temperature = page.getByLabel("Temperature", { exact: true });
+  await temperature.fill("42.5");
+  // Delay the server preview: text must already be visible from client state.
+  await page.route("**/preview", async route => {
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    await route.continue().catch(() => {});
+  });
+  await page.getByLabel("Company", { exact: true }).fill("Live PAMAS text");
+  await expect(page.locator('[data-live-field="company"] canvas')).toHaveAttribute("data-live-text", "Live PAMAS text");
+  const photo = await page.evaluate(() => {
+    const canvas = document.createElement("canvas"); canvas.width = 400; canvas.height = 200;
+    const ctx = canvas.getContext("2d")!; ctx.fillStyle = "white"; ctx.fillRect(0, 0, 400, 200);
+    return canvas.toDataURL("image/png").split(",")[1];
+  });
+  await page.locator('[data-sidebar-field="photo"] input[type="file"]').setInputFiles({ name: "blank.png", mimeType: "image/png", buffer: Buffer.from(photo, "base64") });
+  await expect(page.getByAltText("Photo upload")).toBeVisible();
+  await expect(temperature).toHaveValue("42.5");
+  await expect(page).toHaveURL(/\/drafts\//);
+  await expect(page.locator('[data-autosave-status]')).toHaveText("All changes saved", { timeout: 30000 });
+  await expect.poll(async () => {
+    const draft = await (await request.get(`${base}/drafts/${page.url().split("/").pop()}`)).json();
+    return { temperature: draft.form.values.temp, photos: draft.images.length };
+  }, { timeout: 30000 }).toEqual({ temperature: "42.5", photos: 1 });
+  await page.reload();
+  await expect(page.getByLabel("Temperature", { exact: true })).toHaveValue("42.5");
+  await expect(page.getByLabel("Company", { exact: true })).toHaveValue("Live PAMAS text");
+  await expect(page.getByAltText("Photo upload")).toBeVisible();
+});
+
+test("calculation operands can be text fields and results update while typing", async ({ page, request }) => {
+  const template = await seed(request, false, true);
+  await page.goto(`/templates/custom/${template.id}/new`);
+  await page.getByLabel("Temperature", { exact: true }).fill("12.5");
+  await page.getByLabel("Rated current", { exact: true }).fill("2.5");
+  await expect(page.locator('[data-live-field="load"] canvas')).toHaveAttribute("data-live-text", "500%");
+  await page.getByLabel("Rated current", { exact: true }).fill("hello");
+  await expect(page.locator('[data-live-field="load"] canvas')).toHaveAttribute("data-live-text", "");
+  await page.getByLabel("Rated current", { exact: true }).fill("5");
+  await expect(page.locator('[data-live-field="load"] canvas')).toHaveAttribute("data-live-text", "250%");
+});
+
+
+test("explicit line entry shrinks text, preserves dash readings and recovers selected size", async ({ page, request }) => {
+  const template = await seed(request);
+  await page.goto(`/templates/custom/${template.id}/new`);
+  const company = page.getByLabel("Company", { exact: true });
+  await expect(company).toHaveValue("Shared Company");
+  await company.fill("A");
+  const selectedSize = await company.evaluate(node => parseFloat(getComputedStyle(node).fontSize));
+  await company.fill("A long company name that should shrink on one line ".repeat(5));
+  await expect.poll(() => company.evaluate(node => parseFloat(getComputedStyle(node).fontSize))).toBeLessThan(selectedSize);
+  expect(await company.evaluate(node => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
+  await company.fill("First");
+  await expect.poll(() => company.evaluate(node => parseFloat(getComputedStyle(node).fontSize))).toBe(selectedSize);
+  await company.press("End");
+  await company.press("Control+Enter");
+  await company.pressSequentially("Second");
+  await expect(company).toHaveValue("First\nSecond");
+  await page.getByLabel("Temperature", { exact: true }).fill("-");
+  await page.locator('[data-field-id="company"] .report-field-hit').click();
+  const inline = page.getByLabel("Edit Company in preview", { exact: true });
+  await inline.fill("Inline");
+  await inline.press("End");
+  await inline.press("Meta+Enter");
+  await inline.pressSequentially("New line");
+  await expect(inline).toHaveValue("Inline\nNew line");
+  expect(await inline.evaluate(node => node.scrollHeight <= node.clientHeight + 1 && node.scrollWidth <= node.clientWidth + 1)).toBe(true);
+  await inline.press("Tab");
+  await page.getByLabel("Report title", { exact: true }).fill("Dash reading");
+  await page.getByRole("button", { name: "Save draft", exact: true }).click();
+  await expect(page).toHaveURL(/\/drafts\//);
+  const draftId = page.url().split("/").pop();
+  const saved = await (await request.get(`${api}/${template.id}/drafts/${draftId}`)).json();
+  expect(saved.form.values.temp).toBe("-");
+  expect(saved.form.values.company).toBe("Inline\nNew line");
+  expect((await request.get(`${api}/${template.id}/drafts/${draftId}/pdf`)).ok()).toBe(true);
+});
+
+test("shrinking a report box reduces its displayed font without changing the selected size", async ({ page, request }) => {
+  const template = await seed(request);
+  await page.goto(`/templates/custom/${template.id}/new`);
+  await page.getByLabel("Company", { exact: true }).fill("Report sizing");
+  const field = page.locator('[data-field-id="company"]');
+  const hit = field.locator(".report-field-hit");
+  await hit.click();
+  await page.getByLabel("Report font size", { exact: true }).selectOption("12");
+  const inline = page.getByLabel("Edit Company in preview", { exact: true });
+  await expect(inline).toBeVisible();
+  const before = await inline.evaluate(node => parseFloat(getComputedStyle(node).fontSize));
+  await inline.press("Escape");
+  await hit.hover();
+  const bounds = (await hit.boundingBox())!;
+  const handle = (await field.locator('[data-resize-edge="e"]').boundingBox())!;
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handle.x + handle.width / 2 - bounds.width * .85, handle.y + handle.height / 2, { steps: 8 });
+  await page.mouse.up();
+  await hit.click();
+  await expect.poll(() => inline.evaluate(node => parseFloat(getComputedStyle(node).fontSize))).toBeLessThan(before);
+  await expect(page.getByLabel("Report font size", { exact: true })).toHaveValue("12");
 });

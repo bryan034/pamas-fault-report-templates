@@ -1,4 +1,4 @@
-import { FileText, LockKeyhole, LoaderCircle } from "lucide-react";
+import { LockKeyhole, LoaderCircle } from "lucide-react";
 
 type Props = {
   loading: boolean;
@@ -14,11 +14,11 @@ export function LoginScreen({loading, forbidden, unavailable, loginUrl, callback
   const title = loading ? "Opening your workspace"
     : denied ? "Access approval required"
     : unavailable ? "We couldn’t connect"
-    : "Sign in to Report Formatter";
+    : "Sign in to PAMAS";
   return (
     <main className="login-page">
       <section className="login-card" aria-labelledby="login-heading" aria-busy={loading}>
-        <div className="login-brand"><span className="login-brand-icon"><FileText aria-hidden="true" /></span><span>Report Formatter</span></div>
+        <div className="login-brand"><span className="login-brand-icon"><img src="/pamas-logo.png" alt="" /></span><span>PAMAS</span></div>
         <p className="login-eyebrow"><LockKeyhole size={13} aria-hidden="true" /> Private company workspace</p>
         <h1 id="login-heading">{title}</h1>
         {loading ? (
@@ -41,7 +41,7 @@ export function LoginScreen({loading, forbidden, unavailable, loginUrl, callback
               : "Only approved company accounts can access this workspace. Signing in does not create an account or grant access."}</p>
           </>
         )}
-        <div className="login-footer"><LockKeyhole size={14} aria-hidden="true" /><span>Your Google password is never shared with Report Formatter.</span></div>
+        <div className="login-footer"><LockKeyhole size={14} aria-hidden="true" /><span>Your Google password is never shared with PAMAS.</span></div>
       </section>
     </main>
   );
