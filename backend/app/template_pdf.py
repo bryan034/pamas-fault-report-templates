@@ -431,8 +431,7 @@ def _display_value(field, values):
     return value
 
 
-def _page_box(box: PageBox) -> PageBox:
-    """Keep saved field geometry; report text fits inside this box."""
+def _copy_page_geometry(box: PageBox) -> PageBox:
     return PageBox(page=box.page, x=box.x, y=box.y, width=box.width, height=box.height)
 
 
@@ -532,7 +531,7 @@ def generate_pdf(
     fields_by_page = [[] for _ in definition.pages]
     for field in definition.fields:
         box = report.layout.get(field.id, field)
-        box = _page_box(box)
+        box = _copy_page_geometry(box)
         fields_by_page[box.page].append((field, box))
     shapes_by_page = [[] for _ in definition.pages]
     for shape in report.rectangles:
@@ -591,7 +590,7 @@ def generate_field_layers(definition, report, images):
     for field in definition.fields:
         box = report.layout.get(field.id, field)
         page = definition.pages[box.page]
-        box = _page_box(box)
+        box = _copy_page_geometry(box)
         if field.kind not in {"image", "checkbox"}:
             layout[field.id] = box.model_dump(mode="json")
         if not (field.id in images if field.kind == "image" else values.get(field.id)):
